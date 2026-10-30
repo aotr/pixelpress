@@ -1,0 +1,60 @@
+{
+  "name": "pixelpress",
+  "version": "0.1.0",
+  "description": "Compress and transcode images to AVIF, WebP, JPEG, and PNG with responsive widths, a manifest, and a clean CLI/API.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "pixelpress": "./src/cli.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "prepublishOnly": "npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "image",
+    "images",
+    "compress",
+    "compression",
+    "optimize",
+    "optimization",
+    "avif",
+    "webp",
+    "jpeg",
+    "png",
+    "sharp",
+    "responsive",
+    "srcset",
+    "transcode",
+    "cli"
+  ],
+  "author": "Animesh Chakraborty",
+  "license": "MIT",
+  "homepage": "https://github.com/aotr/pixelpress#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aotr/pixelpress.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aotr/pixelpress/issues"
+  },
+  "dependencies": {
+    "sharp": "^0.35.5"
+  }
+}
