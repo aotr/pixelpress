@@ -1,124 +1,282 @@
 # pixelpress
 
-**Press images into next-gen formats.** Compress JPEG, PNG, WebP, AVIF, TIFF,
-GIF, and SVG into AVIF, WebP, JPEG, or PNG — with responsive widths, a JSON
-manifest, and no interactive prompts.
+**Bulk image compression and transcoding.** Point it at a file, a folder, or a
+glob; get AVIF, WebP, JPEG, or PNG at responsive widths with sensible quality,
+a cache, a manifest, and ready-to-paste `<picture>` snippets.
 
 ```bash
-npx pixelpress public/images -o dist/images --recursive
+npx pixelpress "public/images/**/*.{jpg,png}" -o dist/images \
+  -f avif,webp -w 480,960,1920 --hash --manifest dist/images.json
 ```
 
 ```
-pixelpress public/images → /app/dist/images (avif,webp)
-  ✓ hero.jpg          1.4 MB → 182.3 KB  87% smaller
-  ✓ team/ana.png      420.1 KB → 61.8 KB  85% smaller
-  ✓ icon.svg          12.4 KB → 3.1 KB   75% smaller
+pixelpress 42 files → /app/dist/images (avif,webp)
+  ✓ hero.jpg              1.4 MB → 182.3 KB  87% smaller
+  ✓ team/ana.png          420.1 KB → 61.8 KB  85% smaller
+  ✓ products/chair.webp   118.4 KB → 44.2 KB  63% smaller
 
-3 files · 6 outputs · 1.8 MB → 247.2 KB (86% smaller) · 1.2s
+42 files · 126 outputs · 18.2 MB → 3.1 MB (83% smaller) · 4.2s
 ```
 
-## Why another image tool?
-
-`pixelpress` is a ground-up rebuild of
-[SudiptoImgTranscode](https://www.npmjs.com/package/sudipto-img-transcode).
-Same idea — batch-convert images to modern formats — without the sharp edges:
-
-| Original | pixelpress |
-| --- | --- |
-| JPG only, top-level folder only | Any format sharp reads, recursive with `-r` |
-| Interactive prompts | Flags, usable in CI |
-| One quality for every format | Sensible per-format defaults, override per format |
-| No resizing | `--widths 480,960,1920` for `srcset`, never upscales |
-| `main` runs the CLI on import | Clean `optimize()` / `transcode()` API |
-| Swallowed errors | Per-file failures and exit code 1 |
-| Alpha PNG → JPEG breaks | Flattens transparency onto `--background` |
-| EXIF rotation ignored | Auto-orients before encoding |
-| No way to wire output into markup | `--manifest images.json` |
-| One image at a time | Bounded parallelism (`--concurrency`) |
-| Format subfolders (`out/webp/x.webp`) | Mirrors the input tree, predictable names |
+Node.js 22.5+. One runtime dependency: `sharp`.
 
 ## Install
 
 ```bash
 npm install --save-dev pixelpress
+# or use it without installing
+npx pixelpress --help
 ```
 
-Requires Node.js 20+. The only dependency is `sharp`.
-
-## CLI
+## Quick start
 
 ```bash
-pixelpress <file|dir...> [options]
+# One image, three next-gen sizes
+pixelpress hero.jpg -o dist -w 480,960,1920
 
-  -o, --out <dir>          output directory                (default: pixelpress-out)
-  -f, --formats <list>     avif, webp, jpeg, png            (default: avif,webp)
-  -q, --quality <value>    1-100, or avif=55,webp=78        (default: avif 55, webp 78, jpeg 80, png 80)
-  -w, --widths <list>      responsive widths, e.g. 480,960,1920
-  -r, --recursive          include subdirectories
-      --flat               flatten the output tree (fails on duplicate names)
-      --concurrency <n>    files processed in parallel      (default: 4)
-      --background <color> matte for transparent JPEGs      (default: #ffffff)
-      --keep-metadata      keep EXIF/ICC instead of stripping it
-      --manifest <file>    write a JSON report of every variant
-      --dry-run            show the plan without writing files
-      --json               print the full report as JSON
-  -h, --help
-  -v, --version
+# A whole tree, recursively, keeping folder structure
+pixelpress public/images -o dist/images -r
+
+# Every JPEG/PNG below assets/, but skip drafts
+pixelpress "assets/**/*.{jpg,png}" -o dist/assets \
+  --include "products/**" --exclude "*-draft.*"
+
+# Fit a hard budget per variant, hash filenames, cache the results
+pixelpress photos -o dist -r --max-bytes 120kb --hash --cache
+
+# Rebuild on change
+pixelpress photos -o dist -r --watch
+
+# Generate markup that points at the output
+pixelpress photos -o dist -r -w 480,960,1600 \
+  --picture dist/picture.html --public-path /images
 ```
 
-### Examples
-
-```bash
-# One responsive set, AVIF + WebP
-pixelpress hero.jpg -o dist -f avif,webp -w 480,960,1920
-# → dist/hero-480.avif, dist/hero-960.webp, ...
-
-# Whole asset tree, per-format quality, manifest for your build
-pixelpress public/images -o dist/images -r \
-  -q avif=50,webp=72 -w 320,640,1280 \
-  --manifest dist/images.json
-
-# Preview without touching disk
-pixelpress public/images -o dist -r --dry-run
-
-# Machine-readable run for CI
-pixelpress public/images -o dist --json > report.json
-```
-
-Output keeps your folder structure:
+Output mirrors the input by default:
 
 ```
-public/images/            dist/images/
-  hero.jpg                  hero.avif
-  team/ana.png              hero.webp
-                            team/ana.avif
-                            team/ana.webp
+public/images/                 dist/images/
+  hero.jpg                       hero.avif
+  team/ana.png                   hero.webp
+                                 team/ana.avif
+                                 team/ana.webp
 ```
 
-`--widths` appends the width to filenames (`hero-480.avif`). Widths larger than
-the source are skipped, so a 500px image never becomes a blurry 1280px file.
+With `--widths`, the rendered width is appended: `hero-480.avif`,
+`hero-960.avif`. Widths larger than the source are dropped unless `--enlarge`
+is set.
 
-### Defaults
+## Why pixelpress?
 
-| Format | Quality | Notes |
+It started as a rewrite of
+[SudiptoImgTranscode](https://www.npmjs.com/package/sudipto-img-transcode) —
+same job, none of the sharp edges: any input format, recursive and glob inputs,
+per-format quality, responsive widths, a real API, visible failures, alpha
+handling, EXIF orientation, and tests.
+
+It now borrows the best ideas from the tools people already use:
+[sharp-cli](https://www.npmjs.com/package/sharp-cli) (transforms, globs),
+[imagemin-cli](https://www.npmjs.com/package/imagemin-cli) (batch output),
+[Squoosh CLI](https://www.npmjs.com/package/@squoosh/cli) (per-codec options,
+suffix, size optimization),
+[vite-imagetools](https://www.npmjs.com/package/vite-imagetools) (srcset), and
+[@11ty/eleventy-img](https://www.npmjs.com/package/@11ty/eleventy-img)
+(responsive output sets). See [COMPARISON.md](COMPARISON.md) for the matrix and
+what was adopted.
+
+## CLI reference
+
+### Input and bulk
+
+| Option | Default | Description |
 | --- | --- | --- |
-| AVIF | 55 | Best compression; roughly JPEG-80 visual quality |
-| WebP | 78 | Broad support, fast |
-| JPEG | 80 | `mozjpeg`, progressive |
-| PNG | 80 | Palette quantization at quality < 100; `png=100` is lossless |
+| `<file\|dir\|glob...>` | required | Files, directories, or quoted globs. |
+| `-r, --recursive` | off | Include subdirectories of directory inputs. |
+| `--include <glob>` | all | Only process matching files; repeatable. |
+| `--exclude <glob>` | none | Skip matching files; repeatable. |
+| `--follow-symlinks` | off | Follow symlinked files and directories. |
+| `-c, --config <file>` | auto | JSON or ESM config. Auto-loads `pixelpress.config.json` if present. |
 
-Metadata (EXIF, GPS, ICC) is stripped by default, which also removes privacy
-leaks. Pass `--keep-metadata` to keep it. EXIF orientation is always applied,
-so portrait photos stay upright.
+Globs are expanded by Node, not the shell, so quote them:
+`"public/**/*.{jpg,png}"`. Include/exclude patterns match the path relative to
+the input root and the basename, so `--include "*.jpg"` catches nested JPEGs
+too. Patterns are matched with Node's glob semantics (`*`, `**`, `?`, `[...]`,
+`{a,b}`).
 
-### Manifest
+With multiple directory/glob roots, outputs are prefixed by each root's
+basename to avoid collisions. `--flat` drops the tree and uses basenames
+(collisions are reported, never silently overwritten).
 
-`--manifest` writes a compact report you can consume from templates or build
-steps:
+### Output and naming
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-o, --out <dir>` | `pixelpress-out` | Output directory. |
+| `-f, --formats <list>` | `avif,webp` | Any of `avif,webp,jpeg,png` (or `jpg`). |
+| `-w, --widths <list>` | source size | Responsive widths, e.g. `480,960,1920`. |
+| `--width <px>` | none | Single resize width (not with `--widths`). |
+| `--height <px>` | none | Single resize height (not with `--widths`). |
+| `--fit <mode>` | `inside` | `cover`, `contain`, `fill`, `inside`, `outside`. |
+| `--position <pos>` | `center` | Crop gravity, e.g. `attention`, `entropy`, `right top`. |
+| `--enlarge` | off | Allow upscaling. |
+| `--prefix <text>` | none | Prepend to filenames. |
+| `--suffix <text>` | none | Append to filenames. |
+| `--hash` | off | Append an 8-character SHA-256 content hash. |
+| `--flat` | off | Flatten the output tree. |
+| `--clean` | off | Delete the output directory before writing. |
+| `--preserve-dates` | off | Copy source timestamps onto outputs. |
+
+Name order: `<prefix><name><suffix>[-<width>][-<hash>].<ext>`. For example
+`pre-hero-2x-960-a1b2c3d4.avif`. `--flat`, `--prefix`, and `--suffix` never
+escape the output directory.
+
+### Transforms
+
+| Option | Description |
+| --- | --- |
+| `--rotate <deg>` | Rotate by degrees. This overrides EXIF auto-orientation. |
+| `--no-auto-orient` | Ignore EXIF orientation (on by default). |
+| `--flip` / `--flop` | Flip vertically / horizontally. |
+| `--grayscale` | Convert to grayscale. |
+| `--blur <sigma>` | Gaussian blur. |
+| `--sharpen <sigma>` | Sharpen; `1` is a good starting point. |
+| `--normalize` | Stretch contrast across the full range. |
+| `--gamma <value>` | Gamma correction. |
+| `--tint <color>` | Tint while preserving luminance. |
+| `--trim <threshold>` | Trim uniform borders (1-100). |
+| `--extract <WxH+X+Y>` | Crop a region, e.g. `800x600+100+50`. |
+| `--extend <edges>` | Pad: `10`, `10,20`, or `10,20,30,40` (top,right,bottom,left). |
+| `--density <dpi>` | Rasterization density for SVG input. |
+
+### Encoding
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-q, --quality <value>` | per format | A number 1-100, or `avif=50,webp=72`. |
+| `--effort <value>` | avif 4, webp 4, png 10 | A number or `avif=6,webp=4,png=10`. |
+| `--lossless` | off | Lossless AVIF/WebP/PNG. JPEG is rejected. |
+| `--progressive` | on | Progressive JPEG. |
+| `--no-progressive` | — | Baseline JPEG. |
+| `--chroma-subsampling <s>` | `4:2:0` | `4:2:0`, `4:2:2`, or `4:4:4` (JPEG). |
+| `--alpha-quality <n>` | 100 | WebP alpha quality. |
+| `--palette` / `--no-palette` | auto | Force or disable PNG quantization. |
+| `--compression-level <n>` | 9 | PNG zlib level 0-9. |
+| `--max-bytes <size>` | none | Lower quality until each variant fits, e.g. `150kb`. |
+| `--background <color>` | `#ffffff` | Matte for transparent JPEGs. |
+| `--keep-metadata` | off | Keep EXIF/ICC instead of stripping. |
+
+Default quality is AVIF 55, WebP 78, JPEG 80, PNG 80. PNG quantizes to a
+palette below quality 100; use `--quality png=100` for lossless PNG, or
+`--lossless`.
+
+`--max-bytes` is a **per variant** budget. It first tries your requested
+quality, then binary-searches down. If even quality 1 cannot fit, that file is
+reported as failed instead of writing an oversized output. Lossless and
+`--max-bytes` cannot be combined.
+
+### Workflow
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--manifest <file>` | none | Write a JSON report of every variant. |
+| `--picture <file>` | none | Write `<picture>` snippets for every input. |
+| `--public-path <path>` | `/` | URL prefix used in snippets. |
+| `--sizes <value>` | `100vw` | `sizes` attribute used in snippets. |
+| `--lqip` | off | Add a tiny WebP data-URI placeholder + dominant color. |
+| `--cache` | on | Reuse outputs from `.pixelpress-cache.json`. |
+| `--no-cache` | — | Disable the cache. |
+| `--force` | off | Re-encode even when the cache is valid. |
+| `--fail-fast` | off | Stop after the first failed file. |
+| `--concurrency <n>` | 4 | Files processed in parallel. |
+| `--dry-run` | off | Show the plan; write nothing. |
+| `--json` | off | Print the full report as JSON. |
+| `--quiet` | off | Only print the summary. |
+| `--verbose` | off | Print every variant. |
+| `--watch` | off | Re-run when inputs change. |
+| `-h, --help`, `-v, --version` | | |
+
+Some flags take values beginning with `-` (for example a suffix of `-2x`); use
+the `--flag=value` form, e.g. `--suffix=-2x`.
+
+## Config file
+
+Put defaults in `pixelpress.config.json` and run `pixelpress` with no inputs:
 
 ```json
 {
-  "generatedAt": "2026-10-30T10:00:00.000Z",
+  "inputs": ["src/images/**/*.{jpg,png}"],
+  "outDir": "public/images",
+  "formats": ["avif", "webp"],
+  "widths": [480, 960, 1920],
+  "quality": { "avif": 50, "webp": 72 },
+  "recursive": true,
+  "cache": true,
+  "lqip": true,
+  "manifest": "public/images.json",
+  "picture": "src/_includes/picture.html",
+  "publicPath": "/images",
+  "sizes": "(max-width: 900px) 100vw, 900px"
+}
+```
+
+The file is auto-detected in the current directory. Use
+`--config other.config.json` for another path. `.mjs` and `.js` configs work
+too:
+
+```js
+export default {
+  inputs: ['assets'],
+  outDir: 'dist/assets',
+  formats: ['webp'],
+};
+```
+
+CLI flags override config values. Config keys are the same as the
+[API options](#api). Paths in a config are resolved relative to the current
+working directory. JSON is recommended for portability.
+
+`--watch` cannot be combined with `--json`, `--dry-run`, or `--clean`.
+`--dry-run` writes neither images nor any requested manifest or picture file.
+
+## Caching and watch mode
+
+The CLI enables a cache by default. It lives at
+`<outDir>/.pixelpress-cache.json` and stores each input's mtime, size, and
+outputs, keyed by a fingerprint of all encoding options. Changing quality,
+widths, transforms, or formats invalidates it automatically. Deleting an
+output or touching an input re-encodes that file.
+
+```bash
+pixelpress photos -o dist -r          # first run: encodes
+pixelpress photos -o dist -r          # second run: cached
+pixelpress photos -o dist -r --force  # ignore the cache
+pixelpress photos -o dist -r --no-cache
+```
+
+`--watch` performs the initial run, then waits for image changes and re-runs
+with the cache. Output writes are ignored, so it does not loop. Watches are
+recursive on platforms that support it; on other platforms the input root is
+watched non-recursively.
+
+Cache invalidation uses mtime + size, not content hashing, so replacing a file
+with identical mtime and size will be treated as unchanged. Use `--force` in
+CI or when in doubt.
+
+## Naming, manifests, and `<picture>`
+
+`--hash` appends a content hash, which is useful for immutable CDN caching:
+
+```
+pre-hero-2x-960-a1b2c3d4.avif
+```
+
+`--manifest` writes every input, variant, dimension, byte count, and quality.
+`--lqip` adds `placeholder` (a base64 WebP data URI) and `dominantColor` to
+each file entry. Paths are relative to the current directory.
+
+```json
+{
+  "version": 2,
   "options": { "formats": ["avif", "webp"], "widths": [480], "...": "..." },
   "files": [
     {
@@ -126,65 +284,91 @@ steps:
       "width": 2400,
       "height": 1600,
       "sourceBytes": 1436544,
+      "cached": false,
+      "dominantColor": "#6c7a89",
+      "placeholder": "data:image/webp;base64,UklGR...",
       "outputs": [
-        { "format": "avif", "path": "dist/images/hero-480.avif", "width": 480, "height": 320, "bytes": 14210 },
-        { "format": "webp", "path": "dist/images/hero-480.webp", "width": 480, "height": 320, "bytes": 22981 }
+        {
+          "format": "avif",
+          "path": "dist/images/hero-480.avif",
+          "width": 480,
+          "height": 320,
+          "bytes": 14210,
+          "quality": 55
+        },
+        {
+          "format": "webp",
+          "path": "dist/images/hero-480.webp",
+          "width": 480,
+          "height": 320,
+          "bytes": 22981,
+          "quality": 72
+        }
       ]
     }
   ],
-  "skipped": [],
-  "failed": [],
   "totals": {
     "files": 1,
     "outputs": 2,
+    "cached": 0,
     "sourceBytes": 1436544,
     "outputBytes": 37191,
     "savedBytes": 1399353,
     "savedPercent": 97,
     "skipped": 0,
     "failed": 0,
-    "durationMs": 842
+    "durationMs": 342
   }
 }
 ```
 
-Paths are relative to the current working directory.
+`--picture` writes markup like this, choosing the largest JPEG/PNG/WebP as the
+fallback and adding the other formats as `<source>`:
+
+```html
+<!-- public/images/hero.jpg -->
+<picture>
+  <source type="image/avif" srcset="/images/hero-480.avif 480w, /images/hero-960.avif 960w" sizes="100vw">
+  <source type="image/webp" srcset="/images/hero-480.webp 480w, /images/hero-960.webp 960w" sizes="100vw">
+  <img src="/images/hero-960.jpg" srcset="/images/hero-480.jpg 480w, /images/hero-960.jpg 960w" sizes="100vw" width="960" height="640" alt="" loading="lazy" decoding="async">
+</picture>
+```
+
+Edit `alt` afterwards; snippets intentionally start with an empty value.
 
 ## API
 
-### `optimize(inputs, options)`
-
 ```js
-import { optimize } from 'pixelpress';
+import { optimize, transcode } from 'pixelpress';
 
-const report = await optimize(['public/images'], {
+const report = await optimize(['public/images', 'static/**/*.png'], {
   outDir: 'dist/images',
-  formats: ['avif', 'webp'],
-  widths: [480, 960],
-  quality: { avif: 50, webp: 72 }, // or a single number for all formats
+  formats: ['avif', 'webp', 'jpeg'],
+  widths: [480, 960, 1920],
+  quality: { avif: 50, webp: 72 },
   recursive: true,
-  concurrency: 4,
-  background: '#ffffff',
-  flat: false,
-  dryRun: false,
-  keepMetadata: false,
+  include: ['*.jpg', '*.png'],
+  exclude: ['*-draft.*'],
+  cache: true,
+  lqip: true,
+  concurrency: 8,
 });
 
 console.log(report.totals.savedPercent, '% smaller');
+console.log(report.totals.cached, 'files reused from cache');
+
 for (const file of report.files) {
   for (const variant of file.outputs) {
-    console.log(variant.path, variant.width, variant.bytes);
+    console.log(variant.format, variant.path, variant.width, variant.bytes);
   }
 }
 ```
 
-Every path in the result is absolute. Processing continues when a single file
-fails; inspect `report.failed`. A colliding output path (possible with `flat`)
-fails that file instead of silently overwriting the other one.
+Every path in the API result is absolute. The cache is **off by default** in the
+API; pass `cache: true` to enable it. `force`, `clean`, `failFast`, and all
+transforms accept the same names as the CLI.
 
-### `transcode(input, options)`
-
-Encode one image from a path, `Buffer`, or `Uint8Array`:
+Single image, buffer in and buffer out:
 
 ```js
 import { transcode } from 'pixelpress';
@@ -193,28 +377,38 @@ const { data, info } = await transcode('upload.jpg', {
   format: 'avif',
   width: 800,
   quality: 50,
+  maxBytes: 90_000,
+  grayscale: true,
+  keepMetadata: false,
 });
 
-// data is a Buffer; info = { format, width, height, bytes, sourceWidth }
 await fs.writeFile('upload.avif', data);
+// info = { format, width, height, bytes, quality, sourceWidth, sourceHeight }
 ```
 
-Useful in an upload handler or a build plugin. Pass a buffer to avoid touching
-disk.
+`transcode` accepts a filesystem path, `Buffer`, or `Uint8Array` and applies the
+same transforms, format tuning, and size budget as `optimize`.
 
-## Behavior and guarantees
+## Behavior and limits
 
-- **Never overwrites the input.** `--out` must differ from every input
-  directory, and an output that resolves to an input file is refused.
-- **No upscaling.** Requested widths above the source width are dropped.
-- **Output collisions are errors.** Two inputs mapping to the same output path
-  are reported, not silently lost.
-- **Partial failure is visible.** Bad files land in `failed`, good files are
-  still written, and the CLI exits `1`.
-- **No stale cache.** Every run re-encodes, so changing quality always takes
-  effect. (Incremental caching is on the roadmap.)
-- **Animated images are skipped** with a clear reason, rather than silently
-  losing frames. Support is planned for 0.2.
+- **Never overwrites the input.** Output that resolves to an input file is
+  refused; `--out` cannot equal a directory input.
+- **No upscaling** unless `--enlarge`. Responsive widths above the source are
+  dropped.
+- **Output collisions are errors**, not silent overwrites.
+- **Per-file failures do not stop the run** unless `--fail-fast`; the CLI exits
+  `1` if anything failed.
+- **Metadata is stripped by default** (including GPS); pass `--keep-metadata`
+  to retain EXIF/ICC. EXIF orientation is applied even when metadata is stripped.
+- **Transparent JPEGs** are flattened onto `--background`.
+- **Animated images are skipped** with a reason. Frame-preserving output is on
+  the roadmap.
+- **SVG inputs are rasterized**, not minified. Run SVGO first if you need that.
+- **`--clean` is guarded**: it refuses the filesystem root, the home directory,
+  the current directory, ancestors of the current directory, and any directory
+  containing an input.
+- **No stale cache surprises**: the fingerprint covers every option that
+  affects pixels or output paths.
 
 ## Development
 
@@ -223,9 +417,8 @@ npm install
 npm test
 ```
 
-`PLAN.md` contains the audit, naming rationale, and roadmap (watch mode,
-content hashing, incremental cache, responsive HTML snippets, framework
-plugins).
+`PLAN.md` has the roadmap; `COMPARISON.md` shows how the feature set compares
+with sharp-cli, imagemin-cli, Squoosh CLI, vite-imagetools, and eleventy-img.
 
 ## License
 

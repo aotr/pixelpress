@@ -2,75 +2,106 @@
 
 > Press images into next-gen formats. Fast, scriptable, no prompts.
 
-## Why rename
+## Why the name
 
 `sudipto-img-transcode` described a person and a mechanism, not the job.
-`pixelpress` is short, spellable, free on npm, and says the outcome: images
-getting smaller. Binary and package share the name.
+`pixelpress` is short, spellable, unclaimed on npm, and says the outcome:
+images getting smaller. Binary and package share the name.
 
-## What the original does
+## The original
 
-53 lines. It walks one folder, keeps `.jpg` only, asks three questions in a
-terminal, and writes `out/{png,webp,avif}/name.ext` at one quality for all
-three formats. That's the whole product.
+53 lines. It walked one folder, kept `.jpg` only, asked three questions in a
+terminal, and wrote `out/{png,webp,avif}/name.ext` at one quality for all three
+formats.
 
-## Audit
+## 0.1 audit → what shipped
 
-| Problem | Impact | Fix in pixelpress |
-|---|---|---|
-| `main` points at `app.js`, which runs the CLI on import | Unusable as a library | `src/index.js` is the entry; CLI is separate |
-| JPG only, non-recursive | Most real asset folders fail | Any sharp-readable input, `-r` for trees |
-| One quality for AVIF/WebP/PNG | AVIF 80 wastes bytes; PNG quality is ignored unless paletted | Per-format quality defaults, `--quality avif=50,webp=75` |
-| No resizing | Can't produce `srcset` | `--widths`, never upscales |
-| Errors swallowed with `console.error` | Scripts can't tell success from failure | Per-file failures in the result, exit code 1 |
-| `await` in nested loops | One image at a time | Bounded file concurrency |
-| Format subfolders, guessed paths | Hard to map output back to input | Mirrors input tree, predictable names |
-| Alpha PNG → JPEG throws or turns black | Broken builds | Flattens onto `--background` |
-| EXIF rotation ignored | Portrait photos come out sideways | Auto-orient via `sharp.rotate()` |
-| No manifest | No way to wire outputs into templates | `--manifest` JSON |
-| README says GPL, package says MIT | Legal ambiguity | MIT throughout |
-| Interactive prompts only | No CI/scripts | Flags + programmatic API |
-| No tests | Regressions ship | `node:test` suite |
+| Problem in the original | Fix in 0.1 |
+| --- | --- |
+| `main` ran the CLI on import | `src/index.js` is the library; CLI is separate |
+| JPG only, non-recursive | Any sharp-readable input; recursive and glob inputs |
+| One quality for every format | Per-format defaults and `--quality avif=50,webp=72` |
+| No resizing | `--widths`, never upscales |
+| Errors swallowed | Per-file failures, exit code 1 |
+| One image at a time | Bounded concurrency |
+| Format subfolders | Mirrors the input tree |
+| Alpha PNG → JPEG breaks | Flattens onto `--background` |
+| EXIF rotation ignored | Auto-orients before encoding |
+| No manifest | `--manifest` JSON |
+| GPL/MIT contradiction | MIT throughout |
+| Interactive prompts only | Flags + programmatic API |
+| No tests | `node:test` suite |
 
-## More ideas, ranked by value per line of code
+## 0.2 — the kitchen sink (shipped)
 
-### Now (0.1, in this build)
+Researched sharp-cli, imagemin-cli, Squoosh CLI, vite-imagetools, and
+eleventy-img. See `COMPARISON.md` for the matrix.
 
-- **Per-format defaults** that are actually good: AVIF 55, WebP 78, JPEG 80.
-- **`--manifest`** with dimensions, bytes, and savings per variant.
-- **`--dry-run`** to see the plan before writing.
-- **`--json`** for CI and other tools.
-- **`transcode()` buffer API** for servers and build plugins.
-- **Any-to-any input** (JPEG, PNG, WebP, AVIF, TIFF, GIF frame, SVG).
-- **Safe output**: refuses to overwrite an input, detects flat-name collisions.
-- **Human summary** with real byte savings and elapsed time.
+### Bulk
 
-### Next (0.2)
+- Quoted glob inputs (`"images/**/*.{jpg,png}"`) using Node's glob engine.
+- `--include` / `--exclude` filters (repeatable, basename + relative path).
+- `--follow-symlinks`, recursive walks, multiple inputs, collision detection.
+- Config file (`pixelpress.config.json`, JSON or ESM), CLI overrides.
+- `--clean` with guards against root/home/cwd/input destruction.
+- Cache (`--cache`, on by default) keyed by input mtime/size and an options
+  fingerprint; `--force` and `--no-cache`.
+- `--watch` with debounce, output-event filtering, and cache-backed reruns.
+- `--preserve-dates`.
 
-- `--watch`: re-encode changed files, debounce bursts.
-- Incremental cache keyed by input mtime + options hash, so changing quality
-  invalidates correctly instead of silently serving stale output.
-- Content-hashed filenames (`hero.a1b2c3.avif`) for immutable caching.
-- Animated GIF/WebP/AVIF passthrough with per-frame resize.
-- `--max-bytes`: step quality down until the variant fits a budget.
-- HTML `<picture>` / `srcset` snippet generation from the manifest.
+### Output
 
-### Later (0.3)
+- `--width`/`--height`/`--fit`/`--position` for single-target resizes.
+- Responsive `--widths` sets, no upscaling.
+- `--prefix`, `--suffix`, `--hash` (content hash), `--flat`.
+- `--max-bytes` per-variant quality search.
+- `--lqip` placeholder + dominant color.
+- `--manifest` with cached state, quality used, and LQIP fields.
+- `--picture` snippet generation with `--public-path` and `--sizes`.
 
-- Framework adapters: Vite plugin, Next.js loader, Astro integration.
-- AVIF/WebP negotiation-ready output sets with a single JSON contract.
-- Optional libvips tuning (`sharp.concurrency`, cache limits) for CI boxes.
-- SVGO pass before rasterizing SVG inputs.
+### Transforms
+
+`rotate`, auto-orient toggle, `flip`/`flop`, `grayscale`, `blur`, `sharpen`,
+`normalize`, `gamma`, `tint`, `trim`, `extract`, `extend`, `density`.
+
+### Encoding
+
+Per-format quality and effort, `lossless`, `progressive`, chroma subsampling,
+WebP alpha quality, PNG palette/compression level, metadata retention,
+background matte.
+
+### Workflow
+
+`--json`, `--dry-run`, `--quiet`, `--verbose`, `--fail-fast`,
+`--concurrency`, nameable manifests, config-driven runs.
+
+## 0.3
+
+- **Animated inputs**: preserve frames for GIF/WebP/AVIF; per-frame resize,
+  frame delay, loop count, min/max frame errors.
+- **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
+  `--max-bytes`.
+- **Framework adapters**: Vite plugin, Next.js loader, Astro integration.
+- **HTML report**: a visual before/after gallery with byte deltas.
+- **stdin/stdout mode**: `cat image.png | pixelpress -f webp > out.webp` without
+  temp files.
+- **Plugin hooks**: optional pre/post transform functions for the API (e.g.
+  watermarking).
+- **Better watch fallback**: chokidar-style recursive watching on platforms
+  without recursive `fs.watch`, plus config-file reloads.
 
 ## Non-goals
 
 - A GUI. The CLI is the product; a viewer adds no compression.
 - Upload/CDN integration. Keep the tool local and boring.
 - Replacing sharp. Sharp is the engine; pixelpress is the ergonomics.
+- A general image editor. Transforms cover web delivery, not creative editing.
 
-## Quality bar for 0.1
+## Quality bar
 
-- `npm test` covers API, widths, alpha flattening, collisions, buffer
-  transcoding, and a real CLI run.
-- Every option appears in `--help` and README.
-- No hidden writes: dry-run touches nothing; output never overwrites input.
+- 23 `node:test` cases cover API, globs, filters, quality, transforms, max
+  bytes, cache invalidation, clean safety, LQIP, config, srcset, collisions,
+  alpha flattening, EXIF orientation, and CLI behavior.
+- Every option appears in `--help` and the README.
+- Dry runs touch nothing. Clean refuses unsafe paths. Output never overwrites
+  an input.

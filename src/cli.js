@@ -1,39 +1,106 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { createRequire } from 'node:module';
+import { watch as fsWatch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { optimize } from './index.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
+const DEFAULT_CONFIG = 'pixelpress.config.json';
+const WATCH_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif', '.tif', '.tiff', '.svg',
+]);
 
 const HELP = `pixelpress ${pkg.version} — press images into next-gen formats
 
 Usage
-  pixelpress <file|dir...> [options]
+  pixelpress <file|dir|glob...> [options]
+  pixelpress --config pixelpress.config.json
 
-Options
-  -o, --out <dir>          output directory              (default: pixelpress-out)
-  -f, --formats <list>     avif|webp|jpeg|png            (default: avif,webp)
-  -q, --quality <value>    1-100, or avif=55,webp=78      (default: avif 55, webp 78, jpeg 80, png 80)
-  -w, --widths <list>      responsive widths, e.g. 480,960,1920
-  -r, --recursive          include subdirectories
-      --flat               flatten output tree (fails on duplicate names)
-      --concurrency <n>    files processed in parallel   (default: 4)
-      --background <color> matte for transparent JPEGs   (default: #ffffff)
-      --keep-metadata      keep EXIF/ICC instead of stripping it
-      --manifest <file>    write a JSON report of every variant
-      --dry-run            show the plan without writing files
-      --json               print the full report as JSON
-  -h, --help               show this help
-  -v, --version            show the version
+Input
+  -r, --recursive              include subdirectories
+      --include <glob>         only process matching files (repeatable)
+      --exclude <glob>         skip matching files (repeatable)
+      --follow-symlinks        follow symlinked files and directories
+      --config <file>          JSON or ESM config (auto: pixelpress.config.json)
+
+Output
+  -o, --out <dir>              output directory              (default: pixelpress-out)
+  -f, --formats <list>         avif,webp,jpeg,png            (default: avif,webp)
+  -w, --widths <list>          responsive widths, e.g. 480,960,1920
+      --width <px>             single resize width
+      --height <px>            single resize height
+      --fit <mode>             cover,contain,fill,inside,outside  (default: inside)
+      --position <pos>         crop gravity                  (default: center)
+      --enlarge                allow upscaling
+      --prefix <text>          prepend to output filenames
+      --suffix <text>          append to output filenames
+      --hash                   append an 8-char content hash
+      --flat                   flatten the output tree
+      --clean                  delete the output directory first
+      --preserve-dates         keep source timestamps on outputs
+
+Transforms
+      --rotate <deg>           rotate (overrides EXIF auto-orientation)
+      --no-auto-orient         ignore EXIF orientation
+      --flip                   flip vertically
+      --flop                   flop horizontally
+      --grayscale              convert to grayscale
+      --blur <sigma>           Gaussian blur
+      --sharpen <sigma>        sharpen (try 1)
+      --normalize              stretch contrast
+      --gamma <value>          gamma correction
+      --tint <color>           tint while keeping luminance
+      --trim <threshold>       trim uniform borders
+      --extract <WxH+X+Y>      crop a region
+      --extend <edges>         pad: n, t,h, or t,r,b,l
+      --density <dpi>          rasterize SVG at this density
+
+Encoding
+  -q, --quality <value>        1-100, or avif=55,webp=78
+      --effort <value>         CPU effort, or avif=6,webp=4,png=10
+      --lossless               lossless AVIF/WebP/PNG (not JPEG)
+      --progressive            progressive JPEG (default: on)
+      --no-progressive         baseline JPEG
+      --chroma-subsampling <s> 4:2:0, 4:2:2, or 4:4:4
+      --alpha-quality <n>      WebP alpha quality 1-100
+      --palette                force PNG palette quantization
+      --no-palette             disable PNG palette quantization
+      --compression-level <n>  PNG zlib level 0-9         (default: 9)
+      --max-bytes <size>       fit each variant, e.g. 150kb
+      --background <color>     matte for transparency     (default: #ffffff)
+      --keep-metadata          keep EXIF/ICC instead of stripping
+
+Workflow
+      --manifest <file>        write a JSON manifest
+      --picture <file>         write <picture> snippets
+      --public-path <path>     URL prefix for snippets    (default: /)
+      --sizes <value>          sizes attribute for snippets (default: 100vw)
+      --lqip                   add a placeholder + dominant color
+      --cache                  use the output cache        (default: on)
+      --no-cache               disable the cache
+      --force                  re-encode even when cached
+      --fail-fast              stop after the first failure
+      --concurrency <n>        files in parallel           (default: 4)
+      --dry-run                plan without writing
+      --json                   print the report as JSON
+      --quiet                  only print the summary
+      --verbose                print every variant
+      --watch                  re-run when inputs change
+  -h, --help
+  -v, --version
 
 Examples
-  pixelpress public/images -o dist/images -r
-  pixelpress hero.jpg -f avif,webp -w 480,960,1920 -o dist
-  pixelpress assets -o dist --quality avif=50,webp=72 --manifest dist/images.json
-  pixelpress . -o dist --json > report.json
+  pixelpress "assets/**/*.{jpg,png}" -o dist -w 480,960
+  pixelpress uploads -o public/img -r --fit cover --width 1600
+  pixelpress photos -o dist --max-bytes 120kb --hash --manifest dist/images.json
+  pixelpress photos -o dist --picture dist/picture.html --public-path /img
+  pixelpress photos -o dist --include "*.jpg" --exclude "draft-*" -r
+  pixelpress photos -o dist --watch
+  pixelpress --config pixelpress.config.json
 `;
 
 const supportsColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -43,128 +110,538 @@ const red = paint(31);
 const yellow = paint(33);
 const dim = paint(2);
 const bold = paint(1);
+const cyan = paint(36);
 
-let args;
-try {
-  args = parseArgs({
-    allowPositionals: true,
-    options: {
-      out: { type: 'string', short: 'o' },
-      formats: { type: 'string', short: 'f' },
-      quality: { type: 'string', short: 'q' },
-      widths: { type: 'string', short: 'w' },
-      recursive: { type: 'boolean', short: 'r' },
-      flat: { type: 'boolean' },
-      concurrency: { type: 'string' },
-      background: { type: 'string' },
-      'keep-metadata': { type: 'boolean' },
-      manifest: { type: 'string' },
-      'dry-run': { type: 'boolean' },
-      json: { type: 'boolean' },
-      help: { type: 'boolean', short: 'h' },
-      version: { type: 'boolean', short: 'v' },
-    },
-  });
-} catch (error) {
-  fail(error.message);
-}
+main().catch((error) => fail(error.message));
 
-const { values, positionals } = args;
+async function main() {
+  const { values, positionals } = parseCli(process.argv.slice(2));
 
-if (values.help) {
-  process.stdout.write(HELP);
-  process.exit(0);
-}
-if (values.version) {
-  process.stdout.write(`${pkg.version}\n`);
-  process.exit(0);
-}
-if (positionals.length === 0) {
-  process.stderr.write(`pixelpress: provide at least one file or directory\n\n${HELP}`);
-  process.exit(1);
-}
+  if (values.help) {
+    process.stdout.write(HELP);
+    return;
+  }
+  if (values.version) {
+    process.stdout.write(`${pkg.version}\n`);
+    return;
+  }
 
-const json = Boolean(values.json);
-const log = (...parts) => {
-  if (!json) process.stdout.write(`${parts.join(' ')}\n`);
-};
+  const config = await resolveConfig(values);
+  if (values.watch && values.json) throw new Error('--watch cannot be combined with --json');
+  if (values.watch && (values['dry-run'] || config.dryRun)) throw new Error('--watch cannot be combined with --dry-run');
+  if (values.watch && (values.clean || config.clean)) throw new Error('--watch cannot be combined with --clean');
 
-try {
-  const options = {
-    outDir: values.out ?? 'pixelpress-out',
-    formats: values.formats,
-    widths: values.widths,
-    quality: parseQuality(values.quality),
-    recursive: Boolean(values.recursive),
-    flat: Boolean(values.flat),
-    concurrency: values.concurrency == null ? 4 : parsePositive(values.concurrency, 'concurrency'),
-    background: values.background,
-    keepMetadata: Boolean(values['keep-metadata']),
-    dryRun: Boolean(values['dry-run']),
+  const inputs = positionals.length > 0 ? positionals : toArray(config.inputs);
+  if (inputs.length === 0) {
+    process.stderr.write(`pixelpress: provide at least one file, directory, or glob\n\n${HELP}`);
+    process.exit(1);
+  }
+
+  const options = buildOptions(values, config);
+  const flags = {
+    json: Boolean(values.json),
+    quiet: Boolean(values.quiet),
+    verbose: Boolean(values.verbose),
+    manifest: values.manifest ?? config.manifest,
+    picture: values.picture ?? config.picture,
+    publicPath: values['public-path'] ?? config.publicPath ?? '/',
+    sizes: values.sizes ?? config.sizes ?? '100vw',
+    watch: Boolean(values.watch),
   };
 
-  const header = [
-    bold('pixelpress'),
-    `${positionals.join(', ')} → ${path.resolve(options.outDir)}`,
-    dim(`(${options.formats ?? 'avif,webp'})`),
-  ].join(' ');
-  log(header);
+  if (values['no-cache'] === true) options.cache = false;
+  if (values.cache === true) options.cache = true;
+  if (options.cache === undefined) options.cache = true;
 
-  const result = await optimize(positionals, options);
-  const report = publicReport(result);
+  if (flags.watch) {
+    await watchMode(inputs, options, flags);
+    return;
+  }
 
-  for (const file of result.files) {
-    const outBytes = file.outputs.reduce((sum, output) => sum + (output.bytes ?? 0), 0);
-    if (options.dryRun) {
-      const formats = [...new Set(file.outputs.map((output) => output.format))].join(', ');
-      log(`  ${dim('·')} ${show(file.input)} → ${formats}  ${dim(`(${file.outputs.length})`)}`);
-    } else {
-      const percent = file.sourceBytes > 0 ? Math.round((1 - outBytes / file.sourceBytes) * 100) : 0;
-      const change = percent >= 0 ? green(`${percent}% smaller`) : yellow(`${Math.abs(percent)}% larger`);
-      log(`  ${green('✓')} ${show(file.input)}  ${dim(`${bytes(file.sourceBytes)} → ${bytes(outBytes)}`)}  ${change}`);
+  const result = await runOnce(inputs, options, flags);
+  process.exitCode = result.failed.length > 0 || (result.files.length === 0 && result.skipped.length > 0)
+    ? 1
+    : 0;
+}
+
+function parseCli(argv) {
+  try {
+    return parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: {
+        out: { type: 'string', short: 'o' },
+        'out-dir': { type: 'string' },
+        formats: { type: 'string', short: 'f' },
+        format: { type: 'string' },
+        quality: { type: 'string', short: 'q' },
+        effort: { type: 'string' },
+        widths: { type: 'string', short: 'w' },
+        width: { type: 'string' },
+        height: { type: 'string' },
+        fit: { type: 'string' },
+        position: { type: 'string' },
+        enlarge: { type: 'boolean' },
+        prefix: { type: 'string' },
+        suffix: { type: 'string' },
+        hash: { type: 'boolean' },
+        flat: { type: 'boolean' },
+        clean: { type: 'boolean' },
+        'preserve-dates': { type: 'boolean' },
+        recursive: { type: 'boolean', short: 'r' },
+        include: { type: 'string', multiple: true },
+        exclude: { type: 'string', multiple: true },
+        'follow-symlinks': { type: 'boolean' },
+        config: { type: 'string', short: 'c' },
+
+        rotate: { type: 'string' },
+        'auto-orient': { type: 'boolean' },
+        'no-auto-orient': { type: 'boolean' },
+        flip: { type: 'boolean' },
+        flop: { type: 'boolean' },
+        grayscale: { type: 'boolean' },
+        blur: { type: 'string' },
+        sharpen: { type: 'string' },
+        normalize: { type: 'boolean' },
+        gamma: { type: 'string' },
+        tint: { type: 'string' },
+        trim: { type: 'string' },
+        extract: { type: 'string' },
+        extend: { type: 'string' },
+        density: { type: 'string' },
+
+        lossless: { type: 'boolean' },
+        progressive: { type: 'boolean' },
+        'no-progressive': { type: 'boolean' },
+        'chroma-subsampling': { type: 'string' },
+        'alpha-quality': { type: 'string' },
+        palette: { type: 'boolean' },
+        'no-palette': { type: 'boolean' },
+        'compression-level': { type: 'string' },
+        'max-bytes': { type: 'string' },
+        background: { type: 'string' },
+        'keep-metadata': { type: 'boolean' },
+        metadata: { type: 'boolean' },
+
+        manifest: { type: 'string' },
+        picture: { type: 'string' },
+        'public-path': { type: 'string' },
+        sizes: { type: 'string' },
+        lqip: { type: 'boolean' },
+        cache: { type: 'boolean' },
+        'no-cache': { type: 'boolean' },
+        force: { type: 'boolean' },
+        'fail-fast': { type: 'boolean' },
+        concurrency: { type: 'string' },
+        'dry-run': { type: 'boolean' },
+        json: { type: 'boolean' },
+        quiet: { type: 'boolean' },
+        verbose: { type: 'boolean' },
+        watch: { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
+        version: { type: 'boolean', short: 'v' },
+      },
+    });
+  } catch (error) {
+    fail(error.message);
+  }
+}
+
+async function resolveConfig(values) {
+  let file = null;
+  if (values.config) {
+    file = path.resolve(values.config);
+  } else {
+    const candidate = path.resolve(DEFAULT_CONFIG);
+    try {
+      await fs.access(candidate);
+      file = candidate;
+    } catch {
+      return {};
     }
   }
 
-  for (const item of result.skipped) {
-    log(`  ${dim('·')} ${show(item.input)}  ${dim(item.reason)}`);
+  let data;
+  try {
+    if (/\.(mjs|cjs|js)$/i.test(file)) {
+      const module = await import(`${pathToFileURL(file).href}?t=${Date.now()}`);
+      data = module.default ?? module;
+    } else {
+      data = JSON.parse(await fs.readFile(file, 'utf8'));
+    }
+  } catch (error) {
+    throw new Error(`cannot load config ${file}: ${error.message}`);
   }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error(`config ${file} must export an object`);
+  }
+  const config = { ...data };
+  if (config.out != null && config.outDir == null) config.outDir = config.out;
+  if (config.format != null && config.formats == null) config.formats = config.format;
+  delete config.out;
+  delete config.format;
+  return config;
+}
+
+function buildOptions(values, config) {
+  const options = { ...config };
+  delete options.inputs;
+
+  const out = values.out ?? values['out-dir'];
+  if (out != null) options.outDir = out;
+  if (values.formats != null && values.format != null) {
+    throw new Error('use --formats or --format, not both');
+  }
+  if (values.formats != null) options.formats = values.formats;
+  if (values.format != null) options.formats = values.format;
+  if (values.quality != null) options.quality = parseQuality(values.quality);
+  if (values.effort != null) options.effort = parseEffort(values.effort);
+  if (values.widths != null) {
+    options.widths = values.widths;
+    delete options.width;
+    delete options.height;
+  }
+  if (values.width != null || values.height != null) {
+    delete options.widths;
+    if (values.width != null) options.width = Number(values.width);
+    if (values.height != null) options.height = Number(values.height);
+  }
+  if (values.fit != null) options.fit = values.fit;
+  if (values.position != null) options.position = values.position;
+  if (values.enlarge != null) options.enlarge = true;
+  if (values.prefix != null) options.prefix = values.prefix;
+  if (values.suffix != null) options.suffix = values.suffix;
+  if (values.hash != null) options.hash = true;
+  if (values.flat != null) options.flat = true;
+  if (values.clean != null) options.clean = true;
+  if (values['preserve-dates'] != null) options.preserveDates = true;
+  if (values.recursive != null) options.recursive = true;
+  if (values.include != null) options.include = values.include;
+  if (values.exclude != null) options.exclude = values.exclude;
+  if (values['follow-symlinks'] != null) options.followSymlinks = true;
+
+  if (values.rotate != null) options.rotate = Number(values.rotate);
+  if (values['no-auto-orient']) options.autoOrient = false;
+  if (values['auto-orient'] != null) options.autoOrient = true;
+  if (values.flip != null) options.flip = true;
+  if (values.flop != null) options.flop = true;
+  if (values.grayscale != null) options.grayscale = true;
+  if (values.blur != null) options.blur = Number(values.blur);
+  if (values.sharpen != null) options.sharpen = Number(values.sharpen);
+  if (values.normalize != null) options.normalize = true;
+  if (values.gamma != null) options.gamma = Number(values.gamma);
+  if (values.tint != null) options.tint = values.tint;
+  if (values.trim != null) options.trim = Number(values.trim);
+  if (values.extract != null) options.extract = values.extract;
+  if (values.extend != null) options.extend = values.extend;
+  if (values.density != null) options.density = Number(values.density);
+
+  if (values.lossless != null) options.lossless = true;
+  if (values['no-progressive']) options.progressive = false;
+  if (values.progressive != null) options.progressive = true;
+  if (values['chroma-subsampling'] != null) options.chromaSubsampling = values['chroma-subsampling'];
+  if (values['alpha-quality'] != null) options.alphaQuality = Number(values['alpha-quality']);
+  if (values['no-palette']) options.palette = false;
+  if (values.palette != null) options.palette = true;
+  if (values['compression-level'] != null) options.compressionLevel = Number(values['compression-level']);
+  if (values['max-bytes'] != null) options.maxBytes = parseBytes(values['max-bytes']);
+  if (values.background != null) options.background = values.background;
+  if (values['keep-metadata'] || values.metadata) options.keepMetadata = true;
+
+  if (values.lqip != null) options.lqip = true;
+  if (values.force != null) options.force = true;
+  if (values['fail-fast'] != null) options.failFast = true;
+  if (values['dry-run'] != null) options.dryRun = true;
+  if (values.concurrency != null) options.concurrency = Number(values.concurrency);
+
+  return options;
+}
+
+async function runOnce(inputs, options, flags) {
+  const result = await optimize(inputs, options);
+
+  if (flags.manifest) {
+    if (result.options.dryRun) {
+      if (!flags.json) log(flags, dim('  dry run: manifest not written'));
+    } else {
+      const manifestPath = path.resolve(flags.manifest);
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      await fs.writeFile(manifestPath, `${JSON.stringify(publicReport(result), null, 2)}\n`);
+    }
+  }
+
+  if (flags.picture) {
+    if (result.options.dryRun) {
+      if (!flags.json) log(flags, dim('  dry run: picture snippets not written'));
+    } else {
+      const picturePath = path.resolve(flags.picture);
+      const snippets = result.files
+        .map((file) => buildPicture(file, result.options, flags))
+        .filter(Boolean);
+      await fs.mkdir(path.dirname(picturePath), { recursive: true });
+      await fs.writeFile(picturePath, `<!-- Generated by pixelpress -->\n\n${snippets.join('\n\n')}\n`);
+    }
+  }
+
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify(publicReport(result), null, 2)}\n`);
+  } else {
+    printResult(result, flags);
+  }
+
+  return result;
+}
+
+function printResult(result, flags) {
+  const { totals } = result;
+  if (!flags.quiet) {
+    log(flags, [
+      bold('pixelpress'),
+      result.options.dryRun ? dim('(dry run)') : '',
+      `${count(result.files.length, 'file')} → ${result.options.outDir}`,
+      dim(`(${result.options.formats.join(',')})`),
+    ].filter(Boolean).join(' '));
+
+    for (const file of result.files) {
+      const outBytes = file.outputs.reduce((sum, output) => sum + (output.bytes ?? 0), 0);
+      if (result.options.dryRun) {
+        const formats = [...new Set(file.outputs.map((output) => output.format))].join(',');
+        log(flags, `  ${dim('·')} ${show(file.input)} → ${formats}  ${dim(`(${file.outputs.length})`)}`);
+      } else {
+        const percent = file.sourceBytes > 0 ? Math.round((1 - outBytes / file.sourceBytes) * 100) : 0;
+        const change = file.cached
+          ? cyan('cached')
+          : percent >= 0
+            ? green(`${percent}% smaller`)
+            : yellow(`${Math.abs(percent)}% larger`);
+        log(flags, `  ${green('✓')} ${show(file.input)}  ${dim(`${bytes(file.sourceBytes)} → ${bytes(outBytes)}`)}  ${change}`);
+      }
+
+      if (flags.verbose) {
+        for (const output of file.outputs) {
+          const size = output.bytes == null ? '?' : bytes(output.bytes);
+          log(flags, `      ${output.format.padEnd(4)} ${String(output.width ?? '?').padStart(5)}w ${String(output.height ?? '?').padStart(5)}h ${dim(`${size} q=${output.quality ?? '?'}`)} ${show(output.path)}`);
+        }
+      }
+    }
+
+    for (const item of result.skipped) {
+      log(flags, `  ${dim('·')} ${show(item.input)}  ${dim(item.reason)}`);
+    }
+  }
+
   for (const item of result.failed) {
     process.stderr.write(`  ${red('✗')} ${show(item.input)}  ${item.error}\n`);
   }
 
-  if (values.manifest) {
-    const manifestPath = path.resolve(values.manifest);
-    await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-    await fs.writeFile(manifestPath, `${JSON.stringify(report, null, 2)}\n`);
-    log(`  ${dim('manifest')} → ${show(manifestPath)}`);
+  if (flags.manifest && !flags.quiet && !result.options.dryRun) {
+    log(flags, `  ${dim('manifest')} → ${show(path.resolve(flags.manifest))}`);
+  }
+  if (flags.picture && !flags.quiet && !result.options.dryRun) {
+    log(flags, `  ${dim('picture')} → ${show(path.resolve(flags.picture))}`);
   }
 
-  const { totals } = result;
-  if (options.dryRun) {
-    log(`\n${bold(`${totals.files} files`)} · ${totals.outputs} outputs planned · nothing written`);
+  if (result.options.dryRun) {
+    log(flags, `\n${bold(count(totals.files, 'file'))} · ${count(totals.outputs, 'output')} planned · nothing written`);
   } else {
+    const cached = totals.cached > 0 ? ` (${totals.cached} cached)` : '';
     const sizes = totals.sourceBytes > 0
       ? `${bytes(totals.sourceBytes)} → ${bytes(totals.outputBytes)}  ${
         totals.savedPercent >= 0
           ? green(`(${totals.savedPercent}% smaller)`)
           : yellow(`(${Math.abs(totals.savedPercent)}% larger)`)
       }`
-      : `${bytes(totals.outputBytes)} written`;
-    log(`\n${bold(`${totals.files} files`)} · ${totals.outputs} outputs · ${sizes} · ${(totals.durationMs / 1000).toFixed(1)}s`);
-    if (totals.skipped > 0) log(dim(`${totals.skipped} skipped`));
-    if (totals.failed > 0) log(red(`${totals.failed} failed`));
+      : `${bytes(totals.outputBytes ?? 0)} written`;
+    log(flags, `\n${bold(count(totals.files, 'file'))} · ${count(totals.outputs, 'output')}${cached} · ${sizes} · ${(totals.durationMs / 1000).toFixed(1)}s`);
+  }
+  if (totals.skipped > 0) log(flags, dim(`${count(totals.skipped, 'file')} skipped`));
+  if (totals.failed > 0) log(flags, red(`${count(totals.failed, 'file')} failed`));
+}
+
+async function watchMode(inputs, options, flags) {
+  let running = false;
+  let pending = false;
+  let timer = null;
+
+  const schedule = () => {
+    pending = true;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (running) return;
+      run();
+    }, 250);
+  };
+
+  const run = async ({ announce = true } = {}) => {
+    if (running) return;
+    running = true;
+    pending = false;
+    try {
+      if (announce && !flags.quiet) log(flags, dim(`\n[${new Date().toLocaleTimeString()}] change detected`));
+      await runOnce(inputs, options, flags);
+    } catch (error) {
+      process.stderr.write(`pixelpress: ${error.message}\n`);
+    } finally {
+      running = false;
+      if (pending) schedule();
+    }
+  };
+
+  await run({ announce: false });
+
+  const roots = await watchRoots(inputs);
+  const watchers = [];
+  for (const root of roots) {
+    try {
+      const watcher = fsWatch(root, { recursive: true }, (_, filename) => {
+        const changed = filename ? path.resolve(root, filename) : root;
+        if (isIgnoredChange(changed, options, flags)) return;
+        schedule();
+      });
+      watcher.on('error', (error) => process.stderr.write(`pixelpress: watch error: ${error.message}\n`));
+      watchers.push(watcher);
+    } catch (error) {
+      if (error.code !== 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM') throw error;
+      const watcher = fsWatch(root, (_, filename) => {
+        const changed = filename ? path.resolve(root, filename) : root;
+        if (isIgnoredChange(changed, options, flags)) return;
+        schedule();
+      });
+      watchers.push(watcher);
+    }
   }
 
-  if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  process.exitCode = result.failed.length > 0 || (result.files.length === 0 && result.skipped.length > 0)
-    ? 1
-    : 0;
-} catch (error) {
-  fail(error.message);
+  if (!flags.quiet) log(flags, dim(`\nwatching ${roots.join(', ')} · Ctrl+C to stop`));
+  const close = () => {
+    for (const watcher of watchers) watcher.close();
+    clearTimeout(timer);
+    process.exit(0);
+  };
+  process.once('SIGINT', close);
+  process.once('SIGTERM', close);
+}
+
+function isIgnoredChange(changed, options, flags) {
+  if (changed === options.outDir || isInside(options.outDir, changed)) return true;
+  const absolute = path.resolve(changed);
+  const marker = `${path.sep}node_modules${path.sep}`;
+  const git = `${path.sep}.git${path.sep}`;
+  if (absolute.includes(marker) || absolute.includes(git)) return true;
+  for (const file of [flags.manifest, flags.picture]) {
+    if (file && absolute === path.resolve(file)) return true;
+  }
+  const extension = path.extname(absolute).toLowerCase();
+  if (extension && !WATCH_EXTENSIONS.has(extension)) return true;
+  return false;
+}
+
+async function watchRoots(inputs) {
+  const roots = new Set();
+  for (const input of inputs) {
+    const raw = String(input);
+    if (/[*?[\]{}]/.test(raw)) {
+      roots.add(staticRoot(raw));
+      continue;
+    }
+    const absolute = path.resolve(raw);
+    try {
+      const stat = await fs.stat(absolute);
+      roots.add(stat.isDirectory() ? absolute : path.dirname(absolute));
+    } catch {
+      roots.add(path.dirname(absolute));
+    }
+  }
+  return [...roots];
+}
+
+function staticRoot(pattern) {
+  const normalized = pattern.replaceAll('\\', '/');
+  const segments = normalized.split('/');
+  const index = segments.findIndex((segment) => /[*?[\]{}]/.test(segment));
+  if (index === -1) return path.dirname(path.resolve(pattern));
+  return path.resolve(segments.slice(0, index).join('/') || '.');
+}
+
+function publicReport(result) {
+  return {
+    version: 2,
+    generatedAt: new Date().toISOString(),
+    options: result.options,
+    files: result.files.map((file) => ({
+      input: rel(file.input),
+      width: file.width,
+      height: file.height,
+      sourceBytes: file.sourceBytes,
+      cached: file.cached,
+      ...(file.placeholder ? { placeholder: file.placeholder } : {}),
+      ...(file.dominantColor ? { dominantColor: file.dominantColor } : {}),
+      outputs: file.outputs.map((output) => ({
+        format: output.format,
+        path: rel(output.path),
+        width: output.width,
+        height: output.height,
+        bytes: output.bytes,
+        quality: output.quality,
+      })),
+    })),
+    skipped: result.skipped.map((item) => ({ input: rel(item.input), reason: item.reason })),
+    failed: result.failed.map((item) => ({ input: rel(item.input), error: item.error })),
+    totals: result.totals,
+  };
+}
+
+function buildPicture(file, options, flags) {
+  const groups = new Map();
+  for (const output of file.outputs) {
+    if (!groups.has(output.format)) groups.set(output.format, []);
+    groups.get(output.format).push(output);
+  }
+  const fallbackFormat = ['jpeg', 'png', 'webp', 'avif'].find((format) => groups.has(format));
+  if (!fallbackFormat) return '';
+
+  const url = (output) => joinUrl(
+    flags.publicPath,
+    path.relative(options.outDir, output.path).split(path.sep).join('/'),
+  );
+  const largest = (list) => list.reduce((best, item) => ((item.width ?? 0) > (best.width ?? 0) ? item : best));
+  const srcset = (list) => [...list]
+    .sort((a, b) => (a.width ?? 0) - (b.width ?? 0))
+    .map((output) => (options.widths.length > 0 && output.width ? `${url(output)} ${output.width}w` : url(output)))
+    .join(', ');
+
+  const fallback = largest(groups.get(fallbackFormat));
+  const sizes = flags.sizes ? ` sizes="${escapeHtml(flags.sizes)}"` : '';
+  const sources = ['avif', 'webp', 'jpeg', 'png']
+    .filter((format) => format !== fallbackFormat && groups.has(format))
+    .map((format) => `  <source type="image/${format}" srcset="${escapeHtml(srcset(groups.get(format)))}"${sizes}>`);
+
+  const fallbackOutputs = groups.get(fallbackFormat);
+  const imgSrcset = fallbackOutputs.length > 1
+    ? ` srcset="${escapeHtml(srcset(fallbackOutputs))}"`
+    : '';
+  const dimensions = fallback.width && fallback.height
+    ? ` width="${fallback.width}" height="${fallback.height}"`
+    : '';
+  const img = `  <img src="${escapeHtml(url(fallback))}"${imgSrcset}${sizes}${dimensions} alt="" loading="lazy" decoding="async">`;
+
+  return `<!-- ${escapeHtml(show(file.input))} -->\n<picture>\n${[...sources, img].join('\n')}\n</picture>`;
+}
+
+function joinUrl(base, relative) {
+  const trimmed = String(base ?? '/').replace(/\/+$/, '');
+  return trimmed ? `${trimmed}/${relative}` : `/${relative}`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 function parseQuality(value) {
-  if (value == null) return undefined;
   if (!value.includes('=')) {
     const quality = Number(value);
     if (!Number.isInteger(quality) || quality < 1 || quality > 100) {
@@ -185,33 +662,40 @@ function parseQuality(value) {
   return quality;
 }
 
-function parsePositive(value, label) {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < 1) throw new Error(`${label} must be a positive integer`);
-  return number;
+function parseEffort(value) {
+  if (!value.includes('=')) {
+    const effort = Number(value);
+    if (!Number.isInteger(effort) || effort < 0) throw new Error('effort must be a non-negative integer');
+    return effort;
+  }
+  const effort = {};
+  for (const pair of value.split(',')) {
+    const [format, number] = pair.split('=').map((part) => part.trim());
+    if (!format || !number) throw new Error(`invalid effort pair "${pair}"`);
+    const parsed = Number(number);
+    if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`effort for ${format} must be a non-negative integer`);
+    effort[format] = parsed;
+  }
+  return effort;
 }
 
-function publicReport(result) {
-  return {
-    generatedAt: new Date().toISOString(),
-    options: result.options,
-    files: result.files.map((file) => ({
-      input: rel(file.input),
-      width: file.width,
-      height: file.height,
-      sourceBytes: file.sourceBytes,
-      outputs: file.outputs.map((output) => ({
-        format: output.format,
-        path: rel(output.path),
-        width: output.width,
-        height: output.height,
-        bytes: output.bytes,
-      })),
-    })),
-    skipped: result.skipped.map((item) => ({ input: rel(item.input), reason: item.reason })),
-    failed: result.failed.map((item) => ({ input: rel(item.input), error: item.error })),
-    totals: result.totals,
-  };
+function parseBytes(value) {
+  const match = /^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)?$/i.exec(String(value).trim());
+  if (!match) throw new Error(`invalid size "${value}" (try 150kb or 2mb)`);
+  const units = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3 };
+  const number = Number(match[1]) * units[(match[2] ?? 'b').toLowerCase()];
+  if (!Number.isFinite(number) || number < 1) throw new Error(`invalid size "${value}"`);
+  return Math.round(number);
+}
+
+function toArray(value) {
+  if (value == null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function isInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 function rel(file) {
@@ -225,13 +709,21 @@ function show(file) {
 
 function bytes(number) {
   const units = ['B', 'KB', 'MB', 'GB'];
-  let value = number;
+  let value = Number(number ?? 0);
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
     value /= 1024;
     unit += 1;
   }
   return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
+}
+
+function count(value, singular) {
+  return `${value} ${singular}${value === 1 ? '' : 's'}`;
+}
+
+function log(flags, message) {
+  if (!flags.json) process.stdout.write(`${message}\n`);
 }
 
 function fail(message) {

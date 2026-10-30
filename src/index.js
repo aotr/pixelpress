@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
+import { loadCache, saveCache } from './cache.js';
 
 export const OUTPUT_FORMATS = ['avif', 'webp', 'jpeg', 'png'];
 
@@ -15,10 +18,18 @@ const DEFAULT_QUALITY = {
   png: 80,
 };
 
+const DEFAULT_EFFORT = {
+  avif: 4,
+  webp: 4,
+  png: 10,
+};
+
+const FIT_MODES = ['cover', 'contain', 'fill', 'inside', 'outside'];
+const CHROMA_SUBSAMPLING = ['4:2:0', '4:2:2', '4:4:4'];
 const IGNORED_DIRS = new Set(['node_modules']);
 
 /**
- * Compress and transcode every image under the given files/directories.
+ * Compress and transcode every image under the given files, directories, or globs.
  *
  * @param {string|string[]} inputs
  * @param {object} [options]
@@ -28,52 +39,70 @@ export async function optimize(inputs, options = {}) {
   const startedAt = Date.now();
   const cfg = normalizeOptions(options);
   const { specs, skipped } = await collectSources(inputs, cfg);
-  const claimed = new Map();
 
-  const settled = await mapLimit(specs, cfg.concurrency, async (spec) => {
-    try {
-      const file = await processSource(spec, cfg, claimed);
-      if (file.skip) return { skipped: { input: spec.file, reason: file.skip } };
-      return { file };
-    } catch (error) {
-      return { failed: { input: spec.file, error: error.message } };
-    }
-  });
-
-  const files = settled.filter((r) => r.file).map((r) => r.file);
-  for (const r of settled) {
-    if (r.skipped) skipped.push(r.skipped);
+  if (cfg.clean) {
+    assertSafeClean(cfg, inputs);
+    if (!cfg.dryRun) await fs.rm(cfg.outDir, { recursive: true, force: true });
   }
-  const failed = settled.filter((r) => r.failed).map((r) => r.failed);
+
+  const cache = cfg.cache && !cfg.dryRun ? await loadCache(cfg.outDir, fingerprint(cfg)) : null;
+  const claimed = new Map();
+  const processOne = (spec) => processSource(spec, cfg, claimed, cache);
+
+  let settled;
+  if (cfg.failFast) {
+    settled = [];
+    for (const spec of specs) {
+      const result = await runSafely(spec, processOne);
+      settled.push(result);
+      if (result.failed) break;
+    }
+  } else {
+    settled = await mapLimit(specs, cfg.concurrency, (spec) => runSafely(spec, processOne));
+  }
+
+  const files = settled.filter((result) => result.file).map((result) => result.file);
+  for (const result of settled) {
+    if (result.skipped) skipped.push(result.skipped);
+  }
+  const failed = settled.filter((result) => result.failed).map((result) => result.failed);
 
   files.sort((a, b) => a.input.localeCompare(b.input));
   skipped.sort((a, b) => a.input.localeCompare(b.input));
   failed.sort((a, b) => a.input.localeCompare(b.input));
 
-  const sourceBytes = files.reduce((sum, f) => sum + f.sourceBytes, 0);
+  const sourceBytes = files.reduce((sum, file) => sum + file.sourceBytes, 0);
   const outputBytes = cfg.dryRun
     ? null
-    : files.reduce((sum, f) => sum + f.outputs.reduce((n, o) => n + (o.bytes ?? 0), 0), 0);
+    : files.reduce((sum, file) => sum + file.outputs.reduce((n, output) => n + (output.bytes ?? 0), 0), 0);
+
+  if (cache) {
+    const entries = {};
+    for (const file of files) {
+      const meta = file.cacheMeta;
+      entries[file.input] = {
+        mtimeMs: meta.mtimeMs,
+        size: meta.size,
+        width: file.width,
+        height: file.height,
+        sourceBytes: file.sourceBytes,
+        outputs: file.outputs,
+        placeholder: file.placeholder,
+        dominantColor: file.dominantColor,
+      };
+    }
+    await saveCache(cache, entries);
+  }
 
   return {
-    options: {
-      outDir: cfg.outDir,
-      formats: cfg.formats,
-      widths: cfg.widths,
-      quality: cfg.quality,
-      recursive: cfg.recursive,
-      concurrency: cfg.concurrency,
-      flat: cfg.flat,
-      dryRun: cfg.dryRun,
-      keepMetadata: cfg.keepMetadata,
-      background: cfg.background,
-    },
+    options: publicOptions(cfg),
     files,
     skipped,
     failed,
     totals: {
       files: files.length,
-      outputs: files.reduce((sum, f) => sum + f.outputs.length, 0),
+      outputs: files.reduce((sum, file) => sum + file.outputs.length, 0),
+      cached: files.filter((file) => file.cached).length,
       sourceBytes,
       outputBytes,
       savedBytes: outputBytes === null ? null : sourceBytes - outputBytes,
@@ -92,80 +121,175 @@ export async function optimize(inputs, options = {}) {
  *
  * @param {Buffer|Uint8Array|string} input
  * @param {object} [options]
- * @returns {Promise<{data: Buffer, info: {format: string, width: number, height: number, bytes: number}}>}
+ * @returns {Promise<{data: Buffer, info: object}>}
  */
 export async function transcode(input, options = {}) {
   const buffer = typeof input === 'string' ? await fs.readFile(input) : Buffer.from(input);
   const format = normalizeFormat(options.format ?? 'webp');
-  const quality = resolveSingleQuality(options.quality, format);
-  const background = options.background ?? '#ffffff';
-  const meta = await sharp(buffer).metadata();
+  const cfg = normalizeImageOptions(options);
+  assertLossless(format, cfg);
+
+  const meta = await sharp(buffer, cfg.density ? { density: cfg.density } : undefined).metadata();
   if ((meta.pages ?? 1) > 1) throw new Error('animated images are not supported yet');
 
-  let pipeline = sharp(buffer).rotate();
-  if (options.width) {
-    pipeline = pipeline.resize({
-      width: toPositiveInt(options.width, 'width'),
-      withoutEnlargement: true,
-    });
-  }
-  if (format === 'jpeg') pipeline = pipeline.flatten({ background });
-  if (options.keepMetadata) pipeline = pipeline.withMetadata({ orientation: 1 });
-
-  const { data, info } = await pipeline[format](encoderOptions(format, quality))
-    .toBuffer({ resolveWithObject: true });
+  const encoded = await encodeToBuffer(buffer, cfg, format, cfg.width, cfg.height);
 
   return {
-    data,
+    data: encoded.data,
     info: {
       format,
-      width: info.width,
-      height: info.height,
-      bytes: info.size,
+      width: encoded.info.width,
+      height: encoded.info.height,
+      bytes: encoded.info.size,
+      quality: encoded.quality,
       sourceWidth: orientedWidth(meta),
+      sourceHeight: orientedHeight(meta),
     },
   };
 }
 
-function normalizeOptions(options) {
-  const formats = normalizeFormats(options.formats ?? ['avif', 'webp']);
-  const quality = normalizeQuality(options.quality);
-  const widths = normalizeWidths(options.widths);
-  const outDir = path.resolve(options.outDir ?? 'pixelpress-out');
-  const background = options.background ?? '#ffffff';
-  if (typeof background !== 'string' || background.trim() === '') {
-    throw new TypeError('background must be a non-empty color string');
+async function runSafely(spec, processOne) {
+  try {
+    const file = await processOne(spec);
+    if (file.skip) return { skipped: { input: spec.file, reason: file.skip } };
+    return { file };
+  } catch (error) {
+    return { failed: { input: spec.file, error: error.message } };
   }
-  if (!/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$|^[a-z]+$/i.test(background)) {
-    throw new TypeError(`background must be a hex or CSS color name, got "${background}"`);
+}
+
+function normalizeOptions(options) {
+  const image = normalizeImageOptions(options);
+  const formats = normalizeFormats(options.formats ?? ['avif', 'webp']);
+  const widths = normalizeWidths(options.widths);
+
+  if (widths.length > 0 && (image.width != null || image.height != null)) {
+    throw new TypeError('use either widths (responsive set) or width/height (single resize), not both');
+  }
+  if (image.lossless && formats.includes('jpeg')) {
+    throw new TypeError('lossless is not supported for jpeg');
+  }
+  if (image.lossless && image.maxBytes != null) {
+    throw new TypeError('lossless and maxBytes cannot be combined');
   }
 
+  const prefix = normalizeAffix(options.prefix, 'prefix');
+  const suffix = normalizeAffix(options.suffix, 'suffix');
+
   return {
-    outDir,
+    ...image,
     formats,
-    quality,
     widths,
-    background,
+    outDir: path.resolve(options.outDir ?? 'pixelpress-out'),
+    prefix,
+    suffix,
+    hash: Boolean(options.hash),
     recursive: Boolean(options.recursive),
     flat: Boolean(options.flat),
     dryRun: Boolean(options.dryRun),
+    cache: Boolean(options.cache),
+    force: Boolean(options.force),
+    clean: Boolean(options.clean),
+    failFast: Boolean(options.failFast),
+    followSymlinks: Boolean(options.followSymlinks),
+    preserveDates: Boolean(options.preserveDates),
+    lqip: Boolean(options.lqip),
+    include: normalizePatterns(options.include),
+    exclude: normalizePatterns(options.exclude),
+    concurrency: options.concurrency == null ? 4 : toPositiveInt(options.concurrency, 'concurrency'),
+  };
+}
+
+function normalizeImageOptions(options) {
+  const quality = normalizeQuality(options.quality);
+  const effort = normalizeEffort(options.effort);
+  const background = normalizeColor(options.background ?? '#ffffff', 'background');
+
+  const width = options.width == null ? null : toPositiveInt(options.width, 'width');
+  const height = options.height == null ? null : toPositiveInt(options.height, 'height');
+
+  const fit = options.fit == null ? 'inside' : String(options.fit).toLowerCase();
+  if (!FIT_MODES.includes(fit)) {
+    throw new TypeError(`fit must be one of ${FIT_MODES.join(', ')}`);
+  }
+
+  const position = options.position == null ? 'center' : String(options.position);
+  if (position.trim() === '') throw new TypeError('position must not be empty');
+
+  const rotate = options.rotate == null ? null : normalizeAngle(options.rotate);
+  const blur = options.blur == null ? null : toPositiveNumber(options.blur, 'blur');
+  const sharpen = normalizeSharpen(options.sharpen);
+  const gamma = options.gamma == null ? null : toPositiveNumber(options.gamma, 'gamma');
+  const trim = normalizeTrim(options.trim);
+  const tint = options.tint == null ? null : normalizeColor(options.tint, 'tint');
+  const extract = normalizeExtract(options.extract);
+  const extend = normalizeExtend(options.extend);
+  const density = options.density == null ? null : toPositiveInt(options.density, 'density');
+  const maxBytes = options.maxBytes == null ? null : toPositiveInt(options.maxBytes, 'maxBytes');
+
+  const progressive = options.progressive !== false;
+  const chromaSubsampling = options.chromaSubsampling == null
+    ? '4:2:0'
+    : String(options.chromaSubsampling);
+  if (!CHROMA_SUBSAMPLING.includes(chromaSubsampling)) {
+    throw new TypeError(`chromaSubsampling must be one of ${CHROMA_SUBSAMPLING.join(', ')}`);
+  }
+
+  const alphaQuality = options.alphaQuality == null
+    ? 100
+    : toRange(options.alphaQuality, 'alphaQuality', 1, 100);
+  const compressionLevel = options.compressionLevel == null
+    ? 9
+    : toRange(options.compressionLevel, 'compressionLevel', 0, 9);
+
+  let palette = null;
+  if (options.palette === true) palette = true;
+  if (options.palette === false) palette = false;
+
+  return {
+    quality,
+    effort,
+    width,
+    height,
+    fit,
+    position,
+    enlarge: Boolean(options.enlarge),
+    autoOrient: options.autoOrient !== false,
+    rotate,
+    flip: Boolean(options.flip),
+    flop: Boolean(options.flop),
+    grayscale: Boolean(options.grayscale),
+    blur,
+    sharpen,
+    normalize: Boolean(options.normalize),
+    gamma,
+    tint,
+    trim,
+    extract,
+    extend,
+    density,
+    lossless: Boolean(options.lossless),
+    progressive,
+    chromaSubsampling,
+    alphaQuality,
+    palette,
+    compressionLevel,
+    maxBytes,
+    background,
     keepMetadata: Boolean(options.keepMetadata),
-    concurrency: options.concurrency == null
-      ? 4
-      : toPositiveInt(options.concurrency, 'concurrency'),
   };
 }
 
 function normalizeFormats(input) {
   const list = typeof input === 'string' ? input.split(',') : input;
   if (!Array.isArray(list) || list.length === 0) {
-    throw new TypeError(`formats must be a non-empty array or comma-separated string`);
+    throw new TypeError('formats must be a non-empty array or comma-separated string');
   }
   return [...new Set(list.map((format) => normalizeFormat(String(format).trim())))];
 }
 
 function normalizeFormat(value) {
-  const format = value.toLowerCase();
+  const format = String(value).toLowerCase();
   if (format === 'jpg') return 'jpeg';
   if (!OUTPUT_FORMATS.includes(format)) {
     throw new TypeError(`unsupported format "${value}" (choose ${OUTPUT_FORMATS.join(', ')})`);
@@ -191,18 +315,31 @@ function normalizeQuality(input) {
   return quality;
 }
 
-function resolveSingleQuality(input, format) {
-  if (input == null) return DEFAULT_QUALITY[format];
+function normalizeEffort(input) {
+  const effort = { ...DEFAULT_EFFORT };
+  if (input == null) return effort;
   if (typeof input === 'number') {
-    assertQuality(input, 'quality');
-    return input;
+    for (const format of Object.keys(effort)) effort[format] = input;
+  } else if (typeof input === 'object' && !Array.isArray(input)) {
+    for (const [key, value] of Object.entries(input)) {
+      const format = normalizeFormat(key);
+      if (format === 'jpeg') continue;
+      assertEffort(format, value);
+      effort[format] = value;
+    }
+  } else {
+    throw new TypeError('effort must be a number or an object like { avif: 6, webp: 4 }');
   }
-  if (typeof input !== 'object' || Array.isArray(input)) {
-    throw new TypeError('quality must be a number or an object like { avif: 50, webp: 75 }');
+  for (const [format, value] of Object.entries(effort)) assertEffort(format, value);
+  return effort;
+}
+
+function assertEffort(format, value) {
+  const max = format === 'avif' ? 9 : format === 'webp' ? 6 : 10;
+  const min = format === 'png' ? 1 : 0;
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new TypeError(`effort for ${format} must be an integer between ${min} and ${max}`);
   }
-  const value = input[format] ?? input.jpg ?? DEFAULT_QUALITY[format];
-  assertQuality(value, `quality.${format}`);
-  return value;
 }
 
 function assertQuality(value, label) {
@@ -219,6 +356,59 @@ function normalizeWidths(input) {
   return widths.sort((a, b) => a - b);
 }
 
+function normalizePatterns(input) {
+  if (input == null) return [];
+  const list = typeof input === 'string' ? [input] : input;
+  if (!Array.isArray(list)) throw new TypeError('include/exclude must be a string or array of globs');
+  return list.map((pattern) => String(pattern).trim()).filter(Boolean);
+}
+
+function normalizeAffix(value, label) {
+  if (value == null) return '';
+  const text = String(value);
+  if (text.includes('/') || text.includes('\\')) {
+    throw new TypeError(`${label} must not contain path separators`);
+  }
+  return text;
+}
+
+function normalizeColor(value, label) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new TypeError(`${label} must be a non-empty color string`);
+  }
+  const color = value.trim();
+  if (!/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$|^[a-z]+$/i.test(color)) {
+    throw new TypeError(`${label} must be a hex or CSS color name, got "${value}"`);
+  }
+  return color;
+}
+
+function normalizeAngle(value) {
+  const angle = Number(value);
+  if (!Number.isFinite(angle)) throw new TypeError('rotate must be a number of degrees');
+  return angle;
+}
+
+function normalizeSharpen(value) {
+  if (value == null || value === false) return null;
+  if (value === true) return 1;
+  return toPositiveNumber(value, 'sharpen');
+}
+
+function normalizeTrim(value) {
+  if (value == null || value === false) return null;
+  if (value === true) return 10;
+  return toRange(value, 'trim', 1, 100);
+}
+
+function toRange(value, label, min, max) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw new TypeError(`${label} must be an integer between ${min} and ${max}`);
+  }
+  return number;
+}
+
 function toPositiveInt(value, label) {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 1) {
@@ -227,37 +417,135 @@ function toPositiveInt(value, label) {
   return number;
 }
 
-function encoderOptions(format, quality) {
-  switch (format) {
-    case 'avif':
-      return { avif: { quality, effort: 4 } };
-    case 'webp':
-      return { webp: { quality, effort: 4 } };
-    case 'jpeg':
-      return { jpeg: { quality, mozjpeg: true, progressive: true } };
-    case 'png':
-      return quality >= 100
-        ? { png: { compressionLevel: 9, effort: 10 } }
-        : { png: { compressionLevel: 9, effort: 10, palette: true, quality } };
-    default:
-      throw new TypeError(`unsupported format "${format}"`);
+function toPositiveNumber(value, label) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new TypeError(`${label} must be a positive number`);
   }
+  return number;
+}
+
+function normalizeExtract(input) {
+  if (input == null) return null;
+  if (typeof input === 'string') {
+    const match = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/i.exec(input.trim());
+    if (!match) throw new TypeError('extract must look like 300x200+10+20');
+    const [, width, height, left, top] = match.map(Number);
+    return { width, height, left, top };
+  }
+  if (typeof input === 'object') {
+    return {
+      width: toPositiveInt(input.width, 'extract.width'),
+      height: toPositiveInt(input.height, 'extract.height'),
+      left: input.left == null ? 0 : toNonNegativeInt(input.left, 'extract.left'),
+      top: input.top == null ? 0 : toNonNegativeInt(input.top, 'extract.top'),
+    };
+  }
+  throw new TypeError('extract must be "WxH+X+Y" or { width, height, left, top }');
+}
+
+function normalizeExtend(input) {
+  if (input == null) return null;
+  let values;
+  if (typeof input === 'number' || typeof input === 'string') {
+    values = String(input).split(',').map(Number);
+  } else if (Array.isArray(input)) {
+    values = input.map(Number);
+  } else if (typeof input === 'object') {
+    const all = input.all == null ? null : toNonNegativeInt(input.all, 'extend.all');
+    const pad = (key) => (input[key] == null ? all ?? 0 : toNonNegativeInt(input[key], `extend.${key}`));
+    return { top: pad('top'), right: pad('right'), bottom: pad('bottom'), left: pad('left') };
+  } else {
+    throw new TypeError('extend must be a number, "top,right,bottom,left", or an object');
+  }
+  if (values.length === 1) values = [values[0], values[0], values[0], values[0]];
+  else if (values.length === 2) values = [values[0], values[1], values[0], values[1]];
+  if (values.length !== 4 || values.some((value) => !Number.isInteger(value) || value < 0)) {
+    throw new TypeError('extend must be 1, 2, or 4 non-negative integers');
+  }
+  const [top, right, bottom, left] = values;
+  return { top, right, bottom, left };
+}
+
+function toNonNegativeInt(value, label) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new TypeError(`${label} must be a non-negative integer`);
+  }
+  return number;
+}
+
+function sanitizeOptions(cfg) {
+  const copy = { ...cfg };
+  delete copy.cache;
+  delete copy.force;
+  delete copy.dryRun;
+  delete copy.failFast;
+  delete copy.concurrency;
+  delete copy.clean;
+  return copy;
+}
+
+function fingerprint(cfg) {
+  return createHash('sha256')
+    .update(JSON.stringify(sanitizeOptions(cfg)))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function publicOptions(cfg) {
+  return { ...cfg };
+}
+
+function assertLossless(format, cfg) {
+  if (cfg.lossless && format === 'jpeg') throw new TypeError('lossless is not supported for jpeg');
+  if (cfg.lossless && cfg.maxBytes != null) throw new TypeError('lossless and maxBytes cannot be combined');
 }
 
 async function collectSources(inputs, cfg) {
   const list = (Array.isArray(inputs) ? inputs : [inputs]).filter(Boolean);
-  if (list.length === 0) throw new TypeError('provide at least one input file or directory');
+  if (list.length === 0) throw new TypeError('provide at least one input file, directory, or glob');
 
   const specs = new Map();
   const skipped = [];
 
   for (const input of list) {
-    const absolute = path.resolve(String(input));
+    const raw = String(input);
+    if (isGlob(raw)) {
+      const root = globRoot(raw);
+      const files = [];
+      let matches = 0;
+      try {
+        for await (const match of fs.glob(raw, { cwd: process.cwd() })) {
+          matches += 1;
+          const absolute = path.resolve(match);
+          let stat;
+          try {
+            stat = await fs.stat(absolute);
+          } catch {
+            continue;
+          }
+          if (stat.isFile() && INPUT_EXTENSIONS.has(path.extname(absolute).toLowerCase())) {
+            files.push(absolute);
+          }
+        }
+      } catch (error) {
+        throw new Error(`cannot expand glob "${raw}": ${error.message}`);
+      }
+      if (files.length === 0) {
+        skipped.push({ input: raw, reason: matches === 0 ? 'no files matched' : 'no supported images matched' });
+        continue;
+      }
+      addSpecs(files, root, list.length > 1 ? path.basename(root) : '', specs, cfg);
+      continue;
+    }
+
+    const absolute = path.resolve(raw);
     let stat;
     try {
       stat = await fs.stat(absolute);
     } catch (error) {
-      throw new Error(`cannot read input "${input}": ${error.code === 'ENOENT' ? 'not found' : error.message}`);
+      throw new Error(`cannot read input "${raw}": ${error.code === 'ENOENT' ? 'not found' : error.message}`);
     }
 
     if (stat.isDirectory()) {
@@ -265,33 +553,70 @@ async function collectSources(inputs, cfg) {
         throw new Error(`output directory must differ from input directory: ${absolute}`);
       }
       const files = [];
-      await walk(absolute, files, cfg, cfg.outDir);
+      await walk(absolute, files, cfg, new Set());
       const prefix = list.length > 1 ? path.basename(absolute) : '';
-      for (const file of files) {
-        const relative = cfg.flat
-          ? path.basename(file)
-          : path.join(prefix, path.relative(absolute, file));
-        if (!specs.has(file)) specs.set(file, { file, relative });
-      }
+      addSpecs(files, absolute, prefix, specs, cfg);
     } else if (stat.isFile()) {
+      const relative = path.basename(absolute);
       if (!INPUT_EXTENSIONS.has(path.extname(absolute).toLowerCase())) {
         skipped.push({ input: absolute, reason: 'unsupported file type' });
         continue;
       }
-      const relative = path.basename(absolute);
+      if (!passesFilters(relative, cfg)) {
+        skipped.push({ input: absolute, reason: 'excluded by filter' });
+        continue;
+      }
       if (!specs.has(absolute)) specs.set(absolute, { file: absolute, relative });
     } else {
       throw new Error(`unsupported input: ${absolute}`);
     }
   }
 
-  return {
-    specs: [...specs.values()],
-    skipped,
-  };
+  return { specs: [...specs.values()], skipped };
 }
 
-async function walk(dir, files, cfg, outDir) {
+function addSpecs(files, root, prefix, specs, cfg) {
+  for (const file of files.sort((a, b) => a.localeCompare(b))) {
+    const local = path.relative(root, file);
+    if (!passesFilters(local, cfg)) continue;
+    const relative = cfg.flat ? path.basename(file) : path.join(prefix, local);
+    if (!specs.has(file)) specs.set(file, { file, relative });
+  }
+}
+
+function passesFilters(relative, cfg) {
+  if (cfg.include.length === 0 && cfg.exclude.length === 0) return true;
+  const posix = relative.split(path.sep).join('/');
+  const base = path.basename(relative);
+  const matches = (pattern) => path.matchesGlob(posix, pattern) || path.matchesGlob(base, pattern);
+  if (cfg.include.length > 0 && !cfg.include.some(matches)) return false;
+  if (cfg.exclude.some(matches)) return false;
+  return true;
+}
+
+function isGlob(value) {
+  return /[*?[\]{}]/.test(value);
+}
+
+function globRoot(pattern) {
+  const normalized = pattern.replaceAll('\\', '/');
+  const segments = normalized.split('/');
+  const index = segments.findIndex((segment) => /[*?[\]{}]/.test(segment));
+  if (index === -1) return path.resolve(pattern);
+  const staticPart = segments.slice(0, index).join('/');
+  return path.resolve(staticPart || '.');
+}
+
+async function walk(dir, files, cfg, visited) {
+  let real;
+  try {
+    real = await fs.realpath(dir);
+  } catch {
+    real = path.resolve(dir);
+  }
+  if (visited.has(real)) return;
+  visited.add(real);
+
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -302,12 +627,27 @@ async function walk(dir, files, cfg, outDir) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
+
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name)) continue;
-      if (full === outDir || isInside(outDir, full)) continue;
-      if (cfg.recursive) await walk(full, files, cfg, outDir);
-    } else if (entry.isFile() && INPUT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-      files.push(full);
+      if (full === cfg.outDir || isInside(cfg.outDir, full)) continue;
+      if (cfg.recursive) await walk(full, files, cfg, visited);
+    } else if (entry.isFile()) {
+      if (INPUT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) files.push(full);
+    } else if (entry.isSymbolicLink() && cfg.followSymlinks) {
+      let target;
+      try {
+        target = await fs.stat(full);
+      } catch {
+        continue;
+      }
+      if (target.isDirectory() && cfg.recursive) {
+        if (IGNORED_DIRS.has(entry.name)) continue;
+        if (full === cfg.outDir || isInside(cfg.outDir, full)) continue;
+        await walk(full, files, cfg, visited);
+      } else if (target.isFile() && INPUT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        files.push(full);
+      }
     }
   }
 }
@@ -317,10 +657,33 @@ function isInside(parent, child) {
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
-async function processSource(spec, cfg, claimed) {
+function assertSafeClean(cfg, inputs) {
+  const out = cfg.outDir;
+  const root = path.parse(out).root;
+  const home = path.resolve(os.homedir());
+  if (out === root || out === home || out === process.cwd() || isInside(out, process.cwd())) {
+    throw new Error(`refusing to clean unsafe output directory: ${out}`);
+  }
+  const list = (Array.isArray(inputs) ? inputs : [inputs]).filter(Boolean);
+  for (const input of list) {
+    const absolute = path.resolve(String(input));
+    if (absolute === out || isInside(out, absolute)) {
+      throw new Error(`refusing to clean ${out}: input ${absolute} lives inside it`);
+    }
+  }
+}
+
+async function processSource(spec, cfg, claimed, cache) {
+  const stat = await fs.stat(spec.file);
+  const cached = await fromCache(spec, cfg, cache, claimed, stat);
+  if (cached) {
+    Object.defineProperty(cached, 'cacheMeta', { value: { mtimeMs: stat.mtimeMs, size: stat.size } });
+    return cached;
+  }
+
   let meta;
   try {
-    meta = await sharp(spec.file).metadata();
+    meta = await sharp(spec.file, cfg.density ? { density: cfg.density } : undefined).metadata();
   } catch (error) {
     throw new Error(`cannot read image: ${error.message}`);
   }
@@ -330,42 +693,121 @@ async function processSource(spec, cfg, claimed) {
   }
 
   const sourceWidth = orientedWidth(meta);
-  const widths = targetWidths(sourceWidth, cfg.widths);
+  const variants = selectVariants(sourceWidth, cfg);
   const outputs = [];
 
-  for (const width of widths) {
+  for (const variant of variants) {
     for (const format of cfg.formats) {
-      const outPath = outputPath(spec, cfg, format, width);
+      const needsBuffer = cfg.hash || cfg.maxBytes != null;
+      let encoded = null;
+
+      if (needsBuffer) {
+        encoded = await encodeToBuffer(spec.file, cfg, format, variant.width, variant.height);
+      }
+
+      const digest = cfg.hash ? sha256(encoded.data) : null;
+      const outPath = outputPath(spec, cfg, format, variant.width, digest);
       if (outPath === spec.file) {
         throw new Error('output would overwrite the input file; choose a different --out');
       }
       claim(claimed, outPath, spec.file);
 
-      if (cfg.dryRun) {
-        outputs.push({ format, path: outPath, width: width ?? null, height: null, bytes: null });
-        continue;
+      let info = encoded?.info ?? null;
+      let quality = encoded?.quality ?? cfg.quality[format];
+
+      if (!cfg.dryRun) {
+        await fs.mkdir(path.dirname(outPath), { recursive: true });
+        if (encoded) {
+          await fs.writeFile(outPath, encoded.data);
+        } else {
+          info = await buildPipeline(spec.file, cfg, format, {
+            width: variant.width,
+            height: variant.height,
+            quality,
+          }).toFile(outPath);
+        }
+        if (cfg.preserveDates) {
+          await fs.utimes(outPath, stat.atime, stat.mtime);
+        }
       }
 
-      await fs.mkdir(path.dirname(outPath), { recursive: true });
-      let pipeline = sharp(spec.file).rotate();
-      if (width && width !== sourceWidth) {
-        pipeline = pipeline.resize({ width, withoutEnlargement: true });
-      }
-      if (format === 'jpeg') pipeline = pipeline.flatten({ background: cfg.background });
-      if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ orientation: 1 });
-
-      const info = await pipeline[format](encoderOptions(format, cfg.quality[format])).toFile(outPath);
-      outputs.push({ format, path: outPath, width: info.width, height: info.height, bytes: info.size });
+      outputs.push({
+        format,
+        path: outPath,
+        width: info?.width ?? variant.width ?? null,
+        height: info?.height ?? variant.height ?? null,
+        bytes: info?.size ?? null,
+        quality,
+      });
     }
   }
 
-  return {
+  const file = {
     input: spec.file,
     width: sourceWidth,
     height: orientedHeight(meta),
-    sourceBytes: meta.size ?? (await fs.stat(spec.file)).size,
+    sourceBytes: stat.size,
+    cached: false,
     outputs,
   };
+
+  if (cfg.lqip && !cfg.dryRun) {
+    const placeholder = await makePlaceholder(spec.file, cfg);
+    if (placeholder) {
+      file.placeholder = placeholder.placeholder;
+      file.dominantColor = placeholder.dominantColor;
+    }
+  }
+
+  Object.defineProperty(file, 'cacheMeta', { value: { mtimeMs: stat.mtimeMs, size: stat.size } });
+  return file;
+}
+
+async function fromCache(spec, cfg, cache, claimed, stat) {
+  if (!cache || cfg.force) return null;
+  const entry = cache.files[spec.file];
+  if (!entry) return null;
+  if (entry.mtimeMs !== stat.mtimeMs || entry.size !== stat.size) return null;
+  if (!Array.isArray(entry.outputs) || entry.outputs.length === 0) return null;
+
+  for (const output of entry.outputs) {
+    if (!output.path || !isInside(cfg.outDir, output.path)) return null;
+    try {
+      const outputStat = await fs.stat(output.path);
+      if (output.bytes != null && outputStat.size !== output.bytes) return null;
+    } catch {
+      return null;
+    }
+  }
+  for (const output of entry.outputs) claim(claimed, output.path, spec.file);
+
+  const file = {
+    input: spec.file,
+    width: entry.width ?? null,
+    height: entry.height ?? null,
+    sourceBytes: entry.sourceBytes ?? stat.size,
+    cached: true,
+    outputs: entry.outputs,
+  };
+  if (entry.placeholder) {
+    file.placeholder = entry.placeholder;
+    file.dominantColor = entry.dominantColor;
+  }
+  return file;
+}
+
+function selectVariants(sourceWidth, cfg) {
+  if (cfg.widths.length === 0) {
+    return [{ width: cfg.width, height: cfg.height }];
+  }
+  if (!sourceWidth) {
+    return cfg.widths.map((width) => ({ width, height: null }));
+  }
+  const usable = cfg.enlarge
+    ? cfg.widths
+    : cfg.widths.filter((width) => width <= sourceWidth);
+  const widths = usable.length > 0 ? usable : [sourceWidth];
+  return widths.map((width) => ({ width, height: null }));
 }
 
 function orientedWidth(meta) {
@@ -380,18 +822,15 @@ function orientedHeight(meta) {
   return rotated ? (meta.width ?? meta.height) : meta.height;
 }
 
-function targetWidths(sourceWidth, requested) {
-  if (requested.length === 0) return [sourceWidth ?? null];
-  if (!sourceWidth) return [null];
-  const usable = requested.filter((width) => width <= sourceWidth);
-  return usable.length > 0 ? usable : [sourceWidth];
-}
-
-function outputPath(spec, cfg, format, width) {
-  const base = spec.relative.slice(0, spec.relative.length - path.extname(spec.relative).length);
-  const extension = format === 'jpeg' ? 'jpg' : format;
-  const suffix = cfg.widths.length > 0 && width ? `-${width}` : '';
-  return path.join(cfg.outDir, `${base}${suffix}.${extension}`);
+function outputPath(spec, cfg, format, width, digest) {
+  const extension = path.extname(spec.relative);
+  const directory = path.dirname(spec.relative);
+  const name = path.basename(spec.relative, extension);
+  const outExtension = format === 'jpeg' ? 'jpg' : format;
+  const widthSuffix = cfg.widths.length > 0 && width ? `-${width}` : '';
+  const hashSuffix = digest ? `-${digest}` : '';
+  const fileName = `${cfg.prefix}${name}${cfg.suffix}${widthSuffix}${hashSuffix}.${outExtension}`;
+  return path.join(cfg.outDir, directory === '.' ? '' : directory, fileName);
 }
 
 function claim(claimed, outPath, input) {
@@ -400,6 +839,141 @@ function claim(claimed, outPath, input) {
     throw new Error(`output collision at ${outPath}; two inputs map to one path`);
   }
   claimed.set(outPath, input);
+}
+
+function sha256(data) {
+  return createHash('sha256').update(data).digest('hex').slice(0, 8);
+}
+
+async function encodeToBuffer(input, cfg, format, width, height) {
+  const quality = cfg.quality[format];
+  if (cfg.maxBytes != null) {
+    const attempt = (value) => buildPipeline(input, cfg, format, { width, height, quality: value })
+      .toBuffer({ resolveWithObject: true })
+      .then(({ data, info }) => ({ data, info, quality: value }));
+
+    let best = await attempt(quality);
+    if (best.info.size <= cfg.maxBytes) return best;
+
+    let low = 1;
+    let high = quality - 1;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const candidate = await attempt(mid);
+      if (candidate.info.size <= cfg.maxBytes) {
+        best = candidate;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    if (best.info.size > cfg.maxBytes) {
+      const smallest = quality === 1 ? best : await attempt(1);
+      if (smallest.info.size > cfg.maxBytes) {
+        throw new Error(`cannot fit ${format}${width ? ` at ${width}px` : ''} under maxBytes=${cfg.maxBytes} (smallest output is ${smallest.info.size} bytes)`);
+      }
+      best = smallest;
+    }
+    return best;
+  }
+
+  const { data, info } = await buildPipeline(input, cfg, format, { width, height, quality })
+    .toBuffer({ resolveWithObject: true });
+  return { data, info, quality };
+}
+
+function buildPipeline(input, cfg, format, { width, height, quality }) {
+  let pipeline = sharp(input, cfg.density ? { density: cfg.density } : undefined);
+
+  if (cfg.rotate != null) pipeline = pipeline.rotate(cfg.rotate, { background: cfg.background });
+  else if (cfg.autoOrient) pipeline = pipeline.rotate();
+
+  if (cfg.flip) pipeline = pipeline.flip();
+  if (cfg.flop) pipeline = pipeline.flop();
+  if (cfg.extract) pipeline = pipeline.extract(cfg.extract);
+  if (width != null || height != null) {
+    pipeline = pipeline.resize({
+      width: width ?? undefined,
+      height: height ?? undefined,
+      fit: cfg.fit,
+      position: cfg.position,
+      withoutEnlargement: !cfg.enlarge,
+      background: cfg.background,
+    });
+  }
+  if (cfg.trim) pipeline = pipeline.trim({ threshold: cfg.trim });
+  if (cfg.grayscale) pipeline = pipeline.grayscale();
+  if (cfg.blur) pipeline = pipeline.blur(cfg.blur);
+  if (cfg.sharpen) pipeline = pipeline.sharpen({ sigma: cfg.sharpen });
+  if (cfg.normalize) pipeline = pipeline.normalize();
+  if (cfg.gamma != null) pipeline = pipeline.gamma(cfg.gamma);
+  if (cfg.tint) pipeline = pipeline.tint(cfg.tint);
+  if (cfg.extend) pipeline = pipeline.extend({ ...cfg.extend, background: cfg.background });
+  if (format === 'jpeg') pipeline = pipeline.flatten({ background: cfg.background });
+  if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ orientation: 1 });
+
+  return pipeline[format](encoderOptions(format, cfg, quality));
+}
+
+function encoderOptions(format, cfg, quality) {
+  switch (format) {
+    case 'avif':
+      return { quality, effort: cfg.effort.avif, lossless: cfg.lossless };
+    case 'webp':
+      return {
+        quality,
+        effort: cfg.effort.webp,
+        lossless: cfg.lossless,
+        alphaQuality: cfg.alphaQuality,
+      };
+    case 'jpeg':
+      return {
+        quality,
+        mozjpeg: true,
+        progressive: cfg.progressive,
+        chromaSubsampling: cfg.chromaSubsampling,
+      };
+    case 'png': {
+      const palette = cfg.lossless
+        ? false
+        : cfg.palette == null
+          ? quality < 100
+          : cfg.palette;
+      return {
+        compressionLevel: cfg.compressionLevel,
+        effort: cfg.effort.png,
+        ...(palette ? { palette: true, quality } : {}),
+      };
+    }
+    default:
+      throw new TypeError(`unsupported format "${format}"`);
+  }
+}
+
+async function makePlaceholder(input, cfg) {
+  try {
+    const [preview, color] = await Promise.all([
+      sharp(input, cfg.density ? { density: cfg.density } : undefined)
+        .rotate()
+        .resize({ width: 20, withoutEnlargement: true })
+        .webp({ quality: 30 })
+        .toBuffer(),
+      sharp(input, cfg.density ? { density: cfg.density } : undefined)
+        .rotate()
+        .resize({ width: 1, height: 1, fit: 'fill' })
+        .raw()
+        .toBuffer({ resolveWithObject: true }),
+    ]);
+    const { data, info } = color;
+    const alpha = info.channels === 4 ? data[3] : null;
+    const channels = info.channels >= 3 ? [data[0], data[1], data[2]] : [data[0], data[0], data[0]];
+    return {
+      placeholder: `data:image/webp;base64,${preview.toString('base64')}`,
+      dominantColor: alpha === 0 ? '#ffffff' : `#${channels.map((value) => value.toString(16).padStart(2, '0')).join('')}`,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function mapLimit(items, limit, fn) {

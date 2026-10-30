@@ -7,27 +7,122 @@ export interface QualityMap {
   png?: number;
 }
 
+export interface EffortMap {
+  avif?: number;
+  webp?: number;
+  png?: number;
+}
+
+export type FitMode = 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
+
+export interface ExtractOptions {
+  width: number;
+  height: number;
+  left?: number;
+  top?: number;
+}
+
+export interface ExtendOptions {
+  all?: number;
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+}
+
 export interface OptimizeOptions {
   /** Directory for encoded files. Default: pixelpress-out */
   outDir?: string;
   /** Target formats. Default: ['avif', 'webp'] */
   formats?: OutputFormat[] | string;
-  /** 1-100 for all formats, or per-format values. */
-  quality?: number | QualityMap;
-  /** Responsive widths in pixels. Never upscales. */
+  /** Responsive set. Never upscales unless enlarge is true. */
   widths?: number[] | string;
-  /** Include subdirectories. Default: false */
-  recursive?: boolean;
+  /** Single resize width (do not combine with widths). */
+  width?: number;
+  /** Single resize height (do not combine with widths). */
+  height?: number;
+  fit?: FitMode;
+  position?: string;
+  /** Allow upscaling. Default: false */
+  enlarge?: boolean;
+  /** Prepend to output filenames. */
+  prefix?: string;
+  /** Append to output filenames. */
+  suffix?: string;
+  /** Append an 8-character content hash. Default: false */
+  hash?: boolean;
   /** Flatten the output tree. Default: false */
   flat?: boolean;
-  /** Plan only; write nothing. Default: false */
-  dryRun?: boolean;
-  /** Keep EXIF/ICC. Default: false */
-  keepMetadata?: boolean;
+  /** Delete the output directory first. Default: false */
+  clean?: boolean;
+  /** Copy source timestamps onto outputs. Default: false */
+  preserveDates?: boolean;
+  /** Include subdirectories. Default: false */
+  recursive?: boolean;
+  /** Only process files matching these globs. */
+  include?: string | string[];
+  /** Skip files matching these globs. */
+  exclude?: string | string[];
+  /** Follow symlinked files and directories. Default: false */
+  followSymlinks?: boolean;
+  /** 1-100 for all formats, or per-format values. */
+  quality?: number | QualityMap;
+  /** CPU effort for all applicable formats, or per-format values. */
+  effort?: number | EffortMap;
+  /** Lossless AVIF/WebP/PNG. Not supported for JPEG. */
+  lossless?: boolean;
+  /** Progressive JPEG. Default: true */
+  progressive?: boolean;
+  chromaSubsampling?: '4:2:0' | '4:2:2' | '4:4:4';
+  /** WebP alpha quality, 1-100. Default: 100 */
+  alphaQuality?: number;
+  /** Force PNG palette quantization. Default: automatic by quality. */
+  palette?: boolean;
+  /** PNG zlib level, 0-9. Default: 9 */
+  compressionLevel?: number;
+  /** Search quality down until each variant fits this byte budget. */
+  maxBytes?: number;
   /** Matte for transparent JPEGs. Default: '#ffffff' */
   background?: string;
+  /** Keep EXIF/ICC. Default: false */
+  keepMetadata?: boolean;
+  /** Explicit rotation; overrides EXIF auto-orientation. */
+  rotate?: number;
+  /** Apply EXIF orientation. Default: true */
+  autoOrient?: boolean;
+  flip?: boolean;
+  flop?: boolean;
+  grayscale?: boolean;
+  /** Gaussian blur sigma. */
+  blur?: number;
+  /** Sharpen sigma (true means 1). */
+  sharpen?: number | boolean;
+  /** Stretch contrast to the full range. */
+  normalize?: boolean;
+  /** Gamma correction. */
+  gamma?: number;
+  /** Tint while preserving luminance. */
+  tint?: string;
+  /** Trim uniform borders, threshold 1-100 (true means 10). */
+  trim?: number | boolean;
+  /** Crop as "WxH+X+Y" or an object. */
+  extract?: string | ExtractOptions;
+  /** Pad as n, "t,r,b,l", an array, or an object. */
+  extend?: number | string | number[] | ExtendOptions;
+  /** DPI for rasterizing SVG input. */
+  density?: number;
+  /** Add a tiny placeholder and dominant color. Default: false */
+  lqip?: boolean;
+  /** Reuse the output cache. API default: false; CLI default: true. */
+  cache?: boolean;
+  /** Re-encode even when cached. Default: false */
+  force?: boolean;
+  /** Stop after the first failure. Default: false */
+  failFast?: boolean;
   /** Files processed in parallel. Default: 4 */
   concurrency?: number;
+  /** Plan only; write nothing. Default: false */
+  dryRun?: boolean;
 }
 
 export interface Variant {
@@ -36,8 +131,10 @@ export interface Variant {
   path: string;
   width: number | null;
   height: number | null;
-  /** Encoded size in bytes, or null in dry runs. */
+  /** Encoded size in bytes, or null in a dry run. */
   bytes: number | null;
+  /** Quality actually used (lowered by maxBytes when needed). */
+  quality: number;
 }
 
 export interface ProcessedFile {
@@ -46,6 +143,9 @@ export interface ProcessedFile {
   width: number | null;
   height: number | null;
   sourceBytes: number;
+  cached: boolean;
+  placeholder?: string;
+  dominantColor?: string;
   outputs: Variant[];
 }
 
@@ -62,6 +162,7 @@ export interface FailedFile {
 export interface Totals {
   files: number;
   outputs: number;
+  cached: number;
   sourceBytes: number;
   outputBytes: number | null;
   savedBytes: number | null;
@@ -71,10 +172,30 @@ export interface Totals {
   durationMs: number;
 }
 
+export interface ResolvedOptions {
+  outDir: string;
+  formats: OutputFormat[];
+  widths: number[];
+  quality: Required<QualityMap>;
+  effort: Required<EffortMap>;
+  recursive: boolean;
+  flat: boolean;
+  dryRun: boolean;
+  cache: boolean;
+  force: boolean;
+  clean: boolean;
+  failFast: boolean;
+  followSymlinks: boolean;
+  preserveDates: boolean;
+  lqip: boolean;
+  include: string[];
+  exclude: string[];
+  concurrency: number;
+  [key: string]: unknown;
+}
+
 export interface OptimizeResult {
-  options: Required<Pick<OptimizeOptions, 'outDir' | 'formats' | 'widths' | 'recursive' | 'flat' | 'dryRun' | 'keepMetadata' | 'background' | 'concurrency'>> & {
-    quality: Required<QualityMap>;
-  };
+  options: ResolvedOptions;
   files: ProcessedFile[];
   skipped: SkippedFile[];
   failed: FailedFile[];
@@ -83,12 +204,36 @@ export interface OptimizeResult {
 
 export interface TranscodeOptions {
   /** Default: 'webp' */
-  format?: OutputFormat;
+  format?: OutputFormat | 'jpg';
   width?: number;
-  /** 1-100, or per-format values. */
+  height?: number;
+  fit?: FitMode;
+  position?: string;
   quality?: number | QualityMap;
+  effort?: number | EffortMap;
+  lossless?: boolean;
+  progressive?: boolean;
+  chromaSubsampling?: '4:2:0' | '4:2:2' | '4:4:4';
+  alphaQuality?: number;
+  palette?: boolean;
+  compressionLevel?: number;
+  maxBytes?: number;
   background?: string;
   keepMetadata?: boolean;
+  rotate?: number;
+  autoOrient?: boolean;
+  flip?: boolean;
+  flop?: boolean;
+  grayscale?: boolean;
+  blur?: number;
+  sharpen?: number | boolean;
+  normalize?: boolean;
+  gamma?: number;
+  tint?: string;
+  trim?: number | boolean;
+  extract?: string | ExtractOptions;
+  extend?: number | string | number[] | ExtendOptions;
+  density?: number;
 }
 
 export interface TranscodeResult {
@@ -98,7 +243,9 @@ export interface TranscodeResult {
     width: number;
     height: number;
     bytes: number;
+    quality: number;
     sourceWidth: number | null;
+    sourceHeight: number | null;
   };
 }
 

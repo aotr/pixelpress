@@ -1,4 +1,5 @@
 node_modules/
 pixelpress-out/
+.pixelpress-cache.json
 *.log
 .DS_Store

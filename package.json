@@ -1,7 +1,7 @@
 {
   "name": "pixelpress",
-  "version": "0.1.0",
-  "description": "Compress and transcode images to AVIF, WebP, JPEG, and PNG with responsive widths, a manifest, and a clean CLI/API.",
+  "version": "0.2.0",
+  "description": "Bulk image compression and transcoding to AVIF, WebP, JPEG, and PNG \u2014 globs, responsive widths, transforms, size budgets, cache, watch, manifest, and picture snippets.",
   "type": "module",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
@@ -18,6 +18,8 @@
   "files": [
     "src",
     "README.md",
+    "COMPARISON.md",
+    "PLAN.md",
     "LICENSE"
   ],
   "scripts": {
@@ -25,7 +27,7 @@
     "prepublishOnly": "npm test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5"
   },
   "keywords": [
     "image",
@@ -41,7 +43,14 @@
     "sharp",
     "responsive",
     "srcset",
+    "picture",
     "transcode",
+    "bulk",
+    "batch",
+    "glob",
+    "watch",
+    "cache",
+    "lqip",
     "cli"
   ],
   "author": "Animesh Chakraborty",
