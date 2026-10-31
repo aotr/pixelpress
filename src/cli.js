@@ -5,7 +5,7 @@ import { watch as fsWatch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { optimize } from './index.js';
+import { optimize, transcode } from './index.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -77,6 +77,7 @@ Encoding
 Workflow
       --manifest <file>        write a JSON manifest
       --picture <file>         write <picture> snippets
+      --report <file>          write a visual HTML report
       --public-path <path>     URL prefix for snippets    (default: /)
       --sizes <value>          sizes attribute for snippets (default: 100vw)
       --lqip                   add a placeholder + dominant color
@@ -86,6 +87,7 @@ Workflow
       --fail-fast              stop after the first failure
       --concurrency <n>        files in parallel           (default: 4)
       --dry-run                plan without writing
+      --stdout                 write one encoded image to stdout
       --json                   print the report as JSON
       --quiet                  only print the summary
       --verbose                print every variant
@@ -98,9 +100,12 @@ Examples
   pixelpress uploads -o public/img -r --fit cover --width 1600
   pixelpress photos -o dist --max-bytes 120kb --hash --manifest dist/images.json
   pixelpress photos -o dist --picture dist/picture.html --public-path /img
+  pixelpress photos -o dist --report dist/report.html
   pixelpress photos -o dist --include "*.jpg" --exclude "draft-*" -r
   pixelpress photos -o dist --watch
   pixelpress --config pixelpress.config.json
+  pixelpress photo.jpg -f avif --stdout > photo.avif
+  cat photo.jpg | pixelpress - -f webp --stdout > photo.webp
 `;
 
 const supportsColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -144,6 +149,7 @@ async function main() {
     verbose: Boolean(values.verbose),
     manifest: values.manifest ?? config.manifest,
     picture: values.picture ?? config.picture,
+    report: values.report ?? config.report,
     publicPath: values['public-path'] ?? config.publicPath ?? '/',
     sizes: values.sizes ?? config.sizes ?? '100vw',
     watch: Boolean(values.watch),
@@ -153,8 +159,16 @@ async function main() {
   if (values.cache === true) options.cache = true;
   if (options.cache === undefined) options.cache = true;
 
+  const stdoutRequested = Boolean(values.stdout) || values.out === '-' || values['out-dir'] === '-';
+  if (flags.watch && stdoutRequested) throw new Error('--watch cannot be combined with --stdout');
+
   if (flags.watch) {
     await watchMode(inputs, options, flags);
+    return;
+  }
+
+  if (stdoutRequested) {
+    await runStdout(inputs, options, flags, values);
     return;
   }
 
@@ -225,6 +239,7 @@ function parseCli(argv) {
 
         manifest: { type: 'string' },
         picture: { type: 'string' },
+        report: { type: 'string' },
         'public-path': { type: 'string' },
         sizes: { type: 'string' },
         lqip: { type: 'boolean' },
@@ -234,6 +249,7 @@ function parseCli(argv) {
         'fail-fast': { type: 'boolean' },
         concurrency: { type: 'string' },
         'dry-run': { type: 'boolean' },
+        stdout: { type: 'boolean' },
         json: { type: 'boolean' },
         quiet: { type: 'boolean' },
         verbose: { type: 'boolean' },
@@ -360,7 +376,6 @@ function buildOptions(values, config) {
 
 async function runOnce(inputs, options, flags) {
   const result = await optimize(inputs, options);
-
   if (flags.manifest) {
     if (result.options.dryRun) {
       if (!flags.json) log(flags, dim('  dry run: manifest not written'));
@@ -384,6 +399,16 @@ async function runOnce(inputs, options, flags) {
     }
   }
 
+  if (flags.report) {
+    if (result.options.dryRun) {
+      if (!flags.json) log(flags, dim('  dry run: report not written'));
+    } else {
+      const reportPath = path.resolve(flags.report);
+      await fs.mkdir(path.dirname(reportPath), { recursive: true });
+      await fs.writeFile(reportPath, buildReport(result, reportPath));
+    }
+  }
+
   if (flags.json) {
     process.stdout.write(`${JSON.stringify(publicReport(result), null, 2)}\n`);
   } else {
@@ -393,8 +418,75 @@ async function runOnce(inputs, options, flags) {
   return result;
 }
 
-function printResult(result, flags) {
-  const { totals } = result;
+async function runStdout(inputs, options, flags, values) {
+  if (flags.json) throw new Error('--stdout cannot be combined with --json');
+  if (flags.manifest || flags.picture || flags.report) {
+    throw new Error('--stdout cannot be combined with --manifest, --picture, or --report');
+  }
+  if (options.dryRun) throw new Error('--stdout cannot be combined with --dry-run');
+  if (options.clean) throw new Error('--stdout cannot be combined with --clean');
+  if (inputs.length !== 1) throw new Error('--stdout requires exactly one input');
+
+  const outValue = values.out ?? values['out-dir'];
+  if (outValue && outValue !== '-') throw new Error('--stdout cannot be combined with --out');
+
+  const widths = options.widths;
+  if (widths != null && widths !== '' && (!Array.isArray(widths) || widths.length > 0)) {
+    throw new Error('--stdout requires a single variant; use --width/--height, not --widths');
+  }
+
+  const explicitFormats = values.formats ?? values.format ?? options.formats;
+  const formats = explicitFormats == null
+    ? ['webp']
+    : (Array.isArray(explicitFormats) ? explicitFormats : String(explicitFormats).split(','))
+      .map((format) => String(format).trim())
+      .filter(Boolean);
+  if (formats.length !== 1) {
+    throw new Error('--stdout requires exactly one format, e.g. -f webp');
+  }
+
+  const input = String(inputs[0]);
+  let source;
+  if (input === '-') {
+    source = await readStdin();
+  } else {
+    if (/[*?[\]{}]/.test(input)) throw new Error('--stdout does not support glob inputs');
+    const absolute = path.resolve(input);
+    let stat;
+    try {
+      stat = await fs.stat(absolute);
+    } catch (error) {
+      throw new Error(`cannot read input "${input}": ${error.code === 'ENOENT' ? 'not found' : error.message}`);
+    }
+    if (!stat.isFile()) throw new Error('--stdout requires a single image file or -');
+    source = absolute;
+  }
+
+  const { data, info } = await transcode(source, { ...options, format: formats[0] });
+  await writeStdout(data);
+
+  if (!values.quiet) {
+    const frames = info.animated ? ` · ${info.pages} frames` : '';
+    process.stderr.write(`pixelpress: ${info.format} ${info.width}×${info.height} · ${bytes(info.bytes)}${frames}\n`);
+  }
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    process.stdin.on('data', (chunk) => chunks.push(chunk));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks)));
+    process.stdin.on('error', reject);
+  });
+}
+
+function writeStdout(buffer) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(buffer, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function printResult(result, flags) {  const { totals } = result;
   if (!flags.quiet) {
     log(flags, [
       bold('pixelpress'),
@@ -421,7 +513,8 @@ function printResult(result, flags) {
       if (flags.verbose) {
         for (const output of file.outputs) {
           const size = output.bytes == null ? '?' : bytes(output.bytes);
-          log(flags, `      ${output.format.padEnd(4)} ${String(output.width ?? '?').padStart(5)}w ${String(output.height ?? '?').padStart(5)}h ${dim(`${size} q=${output.quality ?? '?'}`)} ${show(output.path)}`);
+          const frames = output.animated ? ` ${output.pages}f` : '';
+          log(flags, `      ${output.format.padEnd(4)} ${String(output.width ?? '?').padStart(5)}w ${String(output.height ?? '?').padStart(5)}h ${dim(`${size}${frames} q=${output.quality ?? '?'}`)} ${show(output.path)}`);
         }
       }
     }
@@ -440,6 +533,9 @@ function printResult(result, flags) {
   }
   if (flags.picture && !flags.quiet && !result.options.dryRun) {
     log(flags, `  ${dim('picture')} → ${show(path.resolve(flags.picture))}`);
+  }
+  if (flags.report && !flags.quiet && !result.options.dryRun) {
+    log(flags, `  ${dim('report')} → ${show(path.resolve(flags.report))}`);
   }
 
   if (result.options.dryRun) {
@@ -528,7 +624,7 @@ function isIgnoredChange(changed, options, flags) {
   const marker = `${path.sep}node_modules${path.sep}`;
   const git = `${path.sep}.git${path.sep}`;
   if (absolute.includes(marker) || absolute.includes(git)) return true;
-  for (const file of [flags.manifest, flags.picture]) {
+  for (const file of [flags.manifest, flags.picture, flags.report]) {
     if (file && absolute === path.resolve(file)) return true;
   }
   const extension = path.extname(absolute).toLowerCase();
@@ -583,6 +679,8 @@ function publicReport(result) {
         height: output.height,
         bytes: output.bytes,
         quality: output.quality,
+        animated: output.animated,
+        pages: output.pages,
       })),
     })),
     skipped: result.skipped.map((item) => ({ input: rel(item.input), reason: item.reason })),
@@ -597,8 +695,14 @@ function buildPicture(file, options, flags) {
     if (!groups.has(output.format)) groups.set(output.format, []);
     groups.get(output.format).push(output);
   }
-  const fallbackFormat = ['jpeg', 'png', 'webp', 'avif'].find((format) => groups.has(format));
+  const fallbackFormat = (file.outputs.some((output) => output.animated)
+    ? ['jpeg', 'png', 'avif', 'webp']
+    : ['jpeg', 'png', 'webp', 'avif']
+  ).find((format) => groups.has(format));
   if (!fallbackFormat) return '';
+  const sourceOrder = file.outputs.some((output) => output.animated)
+    ? ['webp', 'avif', 'jpeg', 'png']
+    : ['avif', 'webp', 'jpeg', 'png'];
 
   const url = (output) => joinUrl(
     flags.publicPath,
@@ -612,7 +716,7 @@ function buildPicture(file, options, flags) {
 
   const fallback = largest(groups.get(fallbackFormat));
   const sizes = flags.sizes ? ` sizes="${escapeHtml(flags.sizes)}"` : '';
-  const sources = ['avif', 'webp', 'jpeg', 'png']
+  const sources = sourceOrder
     .filter((format) => format !== fallbackFormat && groups.has(format))
     .map((format) => `  <source type="image/${format}" srcset="${escapeHtml(srcset(groups.get(format)))}"${sizes}>`);
 
@@ -626,6 +730,129 @@ function buildPicture(file, options, flags) {
   const img = `  <img src="${escapeHtml(url(fallback))}"${imgSrcset}${sizes}${dimensions} alt="" loading="lazy" decoding="async">`;
 
   return `<!-- ${escapeHtml(show(file.input))} -->\n<picture>\n${[...sources, img].join('\n')}\n</picture>`;
+}
+
+function buildReport(result, reportPath) {
+  const reportDir = path.dirname(reportPath);
+  const { totals, options } = result;
+  const saved = totals.savedPercent == null
+    ? ''
+    : totals.savedPercent >= 0
+      ? `${totals.savedPercent}% smaller`
+      : `${Math.abs(totals.savedPercent)}% larger`;
+  const cards = result.files.map((file) => {
+    const outputs = file.outputs.filter((output) => output.bytes != null);
+    if (outputs.length === 0) return '';
+    const totalBytes = outputs.reduce((sum, output) => sum + output.bytes, 0);
+    const percent = file.sourceBytes > 0 ? Math.round((1 - totalBytes / file.sourceBytes) * 100) : 0;
+    const preview = pickPreview(outputs);
+    const sourceUrl = fileUrl(reportDir, file.input);
+    const previewUrl = fileUrl(reportDir, preview.path);
+    const swatch = file.dominantColor
+      ? `<span class="swatch" style="background-color:${escapeHtml(file.dominantColor)}"></span>`
+      : '';
+    const rows = outputs.map((output) => `
+          <tr>
+            <td>${escapeHtml(output.format)}</td>
+            <td>${output.width ?? '?'} × ${output.height ?? '?'}</td>
+            <td>${bytes(output.bytes)}</td>
+            <td>${output.quality}${output.animated ? ` · ${output.pages} frames` : ''}</td>
+          </tr>`).join('');
+
+    return `
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2 title="${escapeHtml(file.input)}">${escapeHtml(path.basename(file.input))}</h2>
+            <p class="muted">${swatch}${escapeHtml(rel(file.input))} · ${file.width ?? '?'} × ${file.height ?? '?'} source · ${outputs.length} output${outputs.length === 1 ? '' : 's'}${file.cached ? ' · cached' : ''}</p>
+          </div>
+          <span class="pill ${percent >= 0 ? 'good' : 'bad'}">${percent >= 0 ? `${percent}% smaller` : `${Math.abs(percent)}% larger`}</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="${escapeHtml(sourceUrl)}" alt="" loading="lazy">
+            <figcaption>source · ${bytes(file.sourceBytes)}</figcaption>
+          </figure>
+          <figure class="out">
+            <img src="${escapeHtml(previewUrl)}" alt="" loading="lazy">
+            <figcaption>${escapeHtml(preview.format)} · ${bytes(totalBytes)} total</figcaption>
+          </figure>
+        </div>
+        <table>
+          <thead><tr><th>Format</th><th>Size</th><th>Bytes</th><th>Quality</th></tr></thead>
+          <tbody>${rows}
+          </tbody>
+        </table>
+      </article>`;
+  }).filter(Boolean).join('\n');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pixelpress report</title>
+<style>
+  :root { color-scheme: dark; --bg: #0b0d12; --panel: #141923; --panel-2: #0f131b; --text: #e7ecf3; --muted: #8b98ab; --line: #253044; --good: #4ade80; --bad: #f87171; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .hero { max-width: 1500px; margin: 0 auto 24px; }
+  h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: -0.02em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  .hero p { margin: 4px 0; color: var(--muted); }
+  .hero strong { color: var(--text); }
+  .grid { max-width: 1500px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(370px, 1fr)); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; overflow: hidden; }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .card h2 { margin: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+  .muted { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+  .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .pill { flex: none; border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 700; }
+  .pill.good { background: rgba(74, 222, 128, 0.12); color: var(--good); }
+  .pill.bad { background: rgba(248, 113, 113, 0.12); color: var(--bad); }
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0; }
+  figure { margin: 0; border-radius: 9px; overflow: hidden; background: var(--panel-2); }
+  figure img { display: block; width: 100%; height: 150px; object-fit: contain; background-image: linear-gradient(45deg, #1a202c 25%, transparent 25%), linear-gradient(-45deg, #1a202c 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1a202c 75%), linear-gradient(-45deg, transparent 75%, #1a202c 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+  figcaption { padding: 5px 7px; color: var(--muted); font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { text-align: left; padding: 5px 4px; border-top: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  td:nth-child(2), td:nth-child(3), td:nth-child(4) { color: var(--muted); }
+  footer { max-width: 1500px; margin: 24px auto 0; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <h1>pixelpress <span>report</span></h1>
+    <p><strong>${totals.files} files</strong> · ${totals.outputs} outputs · ${bytes(totals.sourceBytes)} → ${bytes(totals.outputBytes ?? 0)}${saved ? ` · <strong>${saved}</strong>` : ''} · ${(totals.durationMs / 1000).toFixed(1)}s</p>
+    <p>${escapeHtml(options.formats.join(', '))}${options.widths.length ? ` · widths ${options.widths.join(', ')}` : ''} · ${escapeHtml(options.outDir)}${totals.cached ? ` · ${totals.cached} cached` : ''}</p>
+  </header>
+  <main class="grid">
+${cards}
+  </main>
+  <footer>Generated by pixelpress ${escapeHtml(pkg.version)} · ${new Date().toISOString()}</footer>
+</body>
+</html>
+`;
+}
+
+function pickPreview(outputs) {
+  const animated = outputs.find((output) => output.animated);
+  if (animated) return animated;
+  for (const format of ['webp', 'jpeg', 'png', 'avif']) {
+    const candidates = outputs.filter((output) => output.format === format);
+    if (candidates.length > 0) {
+      return candidates.reduce((best, item) => ((item.width ?? 0) > (best.width ?? 0) ? item : best));
+    }
+  }
+  return outputs[0];
+}
+
+function fileUrl(fromDir, target) {
+  return path.relative(fromDir, target)
+    .split(path.sep)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
 }
 
 function joinUrl(base, relative) {

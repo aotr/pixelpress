@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const VERSION = 2;
+const VERSION = 3;
 
 export function cacheFilePath(outDir) {
   return path.join(outDir, '.pixelpress-cache.json');

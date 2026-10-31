@@ -1,7 +1,7 @@
 # How pixelpress compares
 
 Versions checked: sharp-cli 6.1, imagemin-cli 8.0, Squoosh CLI 0.7,
-vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.2 (October 2026).
+vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.3 (October 2026).
 
 `✅` first-class, `◐` possible with extra setup, `—` not a feature.
 
@@ -21,13 +21,15 @@ vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.2 (October 2026).
 | Image transforms | ✅ | ✅ (full sharp) | — | ◐ (resize/rotate) | ✅ | ◐ (sharp opts) |
 | Byte-budget search | ✅ | — | — | ✅ (Butteraugli) | — | — |
 | Manifest / JSON report | ✅ | ◐ (`--print`) | — | — | ◐ | ✅ (stats) |
+| Visual HTML report | ✅ | — | — | — | — | — |
+| stdin / stdout pipes | ✅ | ✅ | ✅ | — | — | — |
 | LQIP / dominant color | ✅ | — | — | — | ◐ (blur) | — |
 | Metadata stripping | ✅ default | ◐ (flag) | ◐ (plugins) | ✅ | ✅ | ✅ |
 | Alpha → JPEG flatten | ✅ | ✅ (`flatten`) | — | ✅ | ◐ | ◐ |
 | Bounded concurrency | ✅ | ◐ | ◐ | ✅ | ✅ | ✅ |
 | Dry run | ✅ | ✅ | — | — | — | — |
 | Clean output | ✅ | — | — | — | — | — |
-| Animated input | — (planned) | ✅ | ◐ (plugins) | ✅ | ◐ | ◐ |
+| Animated input | ✅ (WebP frames) | ✅ | ◐ (plugins) | ✅ | ◐ | ◐ |
 | Plugin / codec extensibility | — (planned) | ◐ | ✅ | ✅ (codecs) | ✅ | — |
 | Framework integration | — (planned) | — | — | — | ✅ | ✅ |
 
@@ -44,6 +46,7 @@ From **sharp-cli**:
 From **imagemin-cli**:
 
 - Batch-first CLI with `--out-dir` semantics and simple piping-friendly output.
+- stdin/stdout streaming for one-off conversions.
 - The reminder that per-format settings should be pluggable. pixelpress exposes
   a per-format quality/effort map rather than a plugin system.
 
@@ -81,8 +84,8 @@ From **@11ty/eleventy-img**:
 
 ## Where pixelpress is still behind
 
-- **Animated images** are skipped, not transcoded. sharp-cli and Squoosh can
-  preserve frames.
+- **Animated AVIF** is not supported by the current sharp/libvips build.
+  Animated WebP is preserved; other formats fall back to the first frame.
 - **Bundler plugins** for Vite, Next.js, and Astro do not exist yet.
 - **Quality targeting** is per-variant bytes, not a perceptual metric. A
   Butteraugli/SSIM-guided mode would be better for photos.

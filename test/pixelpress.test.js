@@ -438,6 +438,7 @@ test('cli reads a config and writes picture snippets', async (t) => {
   await makeJpeg(path.join(source, 'photo.jpg'), 300, 200);
   const out = path.join(dir, 'out');
   const picture = path.join(dir, 'picture.html');
+  const reportPath = path.join(dir, 'report.html');
   const config = path.join(dir, 'pixelpress.config.json');
   await fs.writeFile(config, JSON.stringify({
     inputs: [source],
@@ -448,6 +449,7 @@ test('cli reads a config and writes picture snippets', async (t) => {
     cache: false,
     manifest: path.join(dir, 'manifest.json'),
     picture,
+    report: reportPath,
     publicPath: '/img',
     sizes: '50vw',
   }));
@@ -468,6 +470,11 @@ test('cli reads a config and writes picture snippets', async (t) => {
   assert.match(html, /sizes="50vw"/);
   assert.match(html, /<img src="\/img\/cfg-photo-200\.webp"/);
   await fs.access(path.join(dir, 'manifest.json'));
+
+  const htmlReport = await fs.readFile(reportPath, 'utf8');
+  assert.match(htmlReport, /<article class="card">/);
+  assert.match(htmlReport, /cfg-photo-200\.webp/);
+  assert.match(htmlReport, /smaller|larger/);
 });
 
 test('cli dry run writes no images, manifest, or picture file', async (t) => {
@@ -477,6 +484,7 @@ test('cli dry run writes no images, manifest, or picture file', async (t) => {
   const out = path.join(dir, 'out');
   const manifest = path.join(dir, 'manifest.json');
   const picture = path.join(dir, 'picture.html');
+  const htmlReport = path.join(dir, 'report.html');
 
   const { stdout } = await exec(process.execPath, [
     path.join(root, 'src', 'cli.js'),
@@ -486,6 +494,7 @@ test('cli dry run writes no images, manifest, or picture file', async (t) => {
     '--dry-run',
     '--manifest', manifest,
     '--picture', picture,
+    '--report', htmlReport,
     '--json',
   ]);
 
@@ -496,24 +505,46 @@ test('cli dry run writes no images, manifest, or picture file', async (t) => {
   await assert.rejects(fs.access(out));
   await assert.rejects(fs.access(manifest));
   await assert.rejects(fs.access(picture));
+  await assert.rejects(fs.access(htmlReport));
 });
 
-test('animated images are skipped with a reason', async (t) => {
+test('animated frames are preserved in webp and fall back to the first frame', async (t) => {
   const dir = await tempDir(t);
   const frameA = await sharp({ create: { width: 40, height: 40, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
   const frameB = await sharp({ create: { width: 40, height: 40, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 1 } } }).png().toBuffer();
   const animated = path.join(dir, 'loop.gif');
   await sharp([frameA, frameB], { join: { animated: true } }).gif().toFile(animated);
 
-  const result = await optimize([animated], { outDir: path.join(dir, 'out'), formats: ['webp'] });
+  const result = await optimize([animated], {
+    outDir: path.join(dir, 'out'),
+    formats: ['webp', 'avif'],
+    widths: [20],
+  });
 
-  assert.equal(result.files.length, 0);
-  assert.equal(result.skipped.length, 1);
-  assert.match(result.skipped[0].reason, /animated/);
-  await assert.rejects(
-    transcode(await fs.readFile(animated), { format: 'webp' }),
-    /animated/,
-  );
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0].height, 40);
+
+  const webp = result.files[0].outputs.find((output) => output.format === 'webp');
+  const avif = result.files[0].outputs.find((output) => output.format === 'avif');
+  assert.equal(webp.animated, true);
+  assert.equal(webp.pages, 2);
+  assert.equal(webp.width, 20);
+  assert.equal(webp.height, 20);
+  const webpMeta = await sharp(webp.path, { animated: true }).metadata();
+  assert.equal(webpMeta.pages, 2);
+  assert.equal(webpMeta.pageHeight, 20);
+
+  assert.equal(avif.animated, false);
+  assert.equal(avif.pages, 1);
+  assert.equal(avif.height, 20);
+  const avifMeta = await sharp(avif.path, { animated: true }).metadata();
+  assert.equal(avifMeta.pages, 1);
+
+  const transcoded = await transcode(await fs.readFile(animated), { format: 'webp', width: 20 });
+  assert.equal(transcoded.info.animated, true);
+  assert.equal(transcoded.info.pages, 2);
+  assert.equal(transcoded.info.height, 20);
 });
 
 test('failFast stops after the first failed file', async (t) => {
@@ -579,4 +610,38 @@ test('watch re-encodes when an input changes', { timeout: 20_000 }, async (t) =>
 
   child.kill('SIGTERM');
   await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+});
+
+test('cli streams one image to stdout from a file and stdin', async (t) => {
+  const dir = await tempDir(t);
+  const input = path.join(dir, 'photo.jpg');
+  await makeNoise(input, 240, 160);
+
+  async function runStream(args, stdin) {
+    const child = spawn(process.execPath, [path.join(root, 'src', 'cli.js'), ...args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => stdout.push(chunk));
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    if (stdin) child.stdin.end(stdin);
+    else child.stdin.end();
+    const code = await new Promise((resolve) => child.on('close', resolve));
+    return { code, data: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString() };
+  }
+
+  const fromFile = await runStream([input, '-f', 'webp', '--stdout', '--width', '80', '--quiet']);
+  assert.equal(fromFile.code, 0);
+  assert.equal(fromFile.stderr, '');
+  const fileMeta = await sharp(fromFile.data).metadata();
+  assert.equal(fileMeta.format, 'webp');
+  assert.equal(fileMeta.width, 80);
+
+  const fromStdin = await runStream(['-', '-f', 'webp', '--stdout', '--width', '60', '--quiet'], await fs.readFile(input));
+  assert.equal(fromStdin.code, 0);
+  assert.equal(fromStdin.stderr, '');
+  const stdinMeta = await sharp(fromStdin.data).metadata();
+  assert.equal(stdinMeta.format, 'webp');
+  assert.equal(stdinMeta.width, 60);
 });

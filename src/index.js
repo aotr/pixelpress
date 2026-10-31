@@ -24,6 +24,9 @@ const DEFAULT_EFFORT = {
   png: 10,
 };
 
+// libvips/this sharp build preserves frames for animated WebP output only.
+const ANIMATED_OUTPUT_FORMATS = new Set(['webp']);
+
 const FIT_MODES = ['cover', 'contain', 'fill', 'inside', 'outside'];
 const CHROMA_SUBSAMPLING = ['4:2:0', '4:2:2', '4:4:4'];
 const IGNORED_DIRS = new Set(['node_modules']);
@@ -130,18 +133,29 @@ export async function transcode(input, options = {}) {
   assertLossless(format, cfg);
 
   const meta = await sharp(buffer, cfg.density ? { density: cfg.density } : undefined).metadata();
-  if ((meta.pages ?? 1) > 1) throw new Error('animated images are not supported yet');
+  const animated = (meta.pages ?? 1) > 1 && ANIMATED_OUTPUT_FORMATS.has(format);
+  const encoded = await encodeToBuffer(buffer, cfg, format, cfg.width, cfg.height, animated);
 
-  const encoded = await encodeToBuffer(buffer, cfg, format, cfg.width, cfg.height);
+  let width = encoded.info.width;
+  let height = encoded.info.height;
+  let pages = 1;
+  if (animated) {
+    const outputMeta = await sharp(encoded.data, { animated: true }).metadata();
+    width = outputMeta.width ?? width;
+    height = outputMeta.pageHeight ?? height;
+    pages = outputMeta.pages ?? (meta.pages ?? 1);
+  }
 
   return {
     data: encoded.data,
     info: {
       format,
-      width: encoded.info.width,
-      height: encoded.info.height,
+      width,
+      height,
       bytes: encoded.info.size,
       quality: encoded.quality,
+      animated,
+      pages,
       sourceWidth: orientedWidth(meta),
       sourceHeight: orientedHeight(meta),
     },
@@ -688,21 +702,19 @@ async function processSource(spec, cfg, claimed, cache) {
     throw new Error(`cannot read image: ${error.message}`);
   }
 
-  if ((meta.pages ?? 1) > 1) {
-    return { skip: 'animated images are not supported yet' };
-  }
-
   const sourceWidth = orientedWidth(meta);
+  const animatedInput = (meta.pages ?? 1) > 1;
   const variants = selectVariants(sourceWidth, cfg);
   const outputs = [];
 
   for (const variant of variants) {
     for (const format of cfg.formats) {
+      const keepFrames = animatedInput && ANIMATED_OUTPUT_FORMATS.has(format);
       const needsBuffer = cfg.hash || cfg.maxBytes != null;
       let encoded = null;
 
       if (needsBuffer) {
-        encoded = await encodeToBuffer(spec.file, cfg, format, variant.width, variant.height);
+        encoded = await encodeToBuffer(spec.file, cfg, format, variant.width, variant.height, keepFrames);
       }
 
       const digest = cfg.hash ? sha256(encoded.data) : null;
@@ -713,7 +725,7 @@ async function processSource(spec, cfg, claimed, cache) {
       claim(claimed, outPath, spec.file);
 
       let info = encoded?.info ?? null;
-      let quality = encoded?.quality ?? cfg.quality[format];
+      const quality = encoded?.quality ?? cfg.quality[format];
 
       if (!cfg.dryRun) {
         await fs.mkdir(path.dirname(outPath), { recursive: true });
@@ -724,6 +736,7 @@ async function processSource(spec, cfg, claimed, cache) {
             width: variant.width,
             height: variant.height,
             quality,
+            animated: keepFrames,
           }).toFile(outPath);
         }
         if (cfg.preserveDates) {
@@ -731,13 +744,27 @@ async function processSource(spec, cfg, claimed, cache) {
         }
       }
 
+      let width = info?.width ?? variant.width ?? null;
+      let height = info?.height ?? variant.height ?? null;
+      let pages = keepFrames ? (meta.pages ?? 1) : 1;
+      if (keepFrames && info) {
+        const outputMeta = encoded
+          ? await sharp(encoded.data, { animated: true }).metadata()
+          : await sharp(outPath, { animated: true }).metadata();
+        width = outputMeta.width ?? width;
+        height = outputMeta.pageHeight ?? height;
+        pages = outputMeta.pages ?? (meta.pages ?? 1);
+      }
+
       outputs.push({
         format,
         path: outPath,
-        width: info?.width ?? variant.width ?? null,
-        height: info?.height ?? variant.height ?? null,
+        width,
+        height,
         bytes: info?.size ?? null,
         quality,
+        animated: keepFrames,
+        pages,
       });
     }
   }
@@ -813,13 +840,14 @@ function selectVariants(sourceWidth, cfg) {
 function orientedWidth(meta) {
   if (!meta.width) return null;
   const rotated = [5, 6, 7, 8].includes(meta.orientation);
-  return rotated ? (meta.height ?? meta.width) : meta.width;
+  return rotated ? (meta.pageHeight ?? meta.height ?? meta.width) : meta.width;
 }
 
 function orientedHeight(meta) {
-  if (!meta.height) return null;
+  const pageHeight = meta.pageHeight ?? meta.height;
+  if (!pageHeight) return null;
   const rotated = [5, 6, 7, 8].includes(meta.orientation);
-  return rotated ? (meta.width ?? meta.height) : meta.height;
+  return rotated ? (meta.width ?? pageHeight) : pageHeight;
 }
 
 function outputPath(spec, cfg, format, width, digest) {
@@ -845,10 +873,10 @@ function sha256(data) {
   return createHash('sha256').update(data).digest('hex').slice(0, 8);
 }
 
-async function encodeToBuffer(input, cfg, format, width, height) {
+async function encodeToBuffer(input, cfg, format, width, height, animated = false) {
   const quality = cfg.quality[format];
   if (cfg.maxBytes != null) {
-    const attempt = (value) => buildPipeline(input, cfg, format, { width, height, quality: value })
+    const attempt = (value) => buildPipeline(input, cfg, format, { width, height, quality: value, animated })
       .toBuffer({ resolveWithObject: true })
       .then(({ data, info }) => ({ data, info, quality: value }));
 
@@ -877,13 +905,16 @@ async function encodeToBuffer(input, cfg, format, width, height) {
     return best;
   }
 
-  const { data, info } = await buildPipeline(input, cfg, format, { width, height, quality })
+  const { data, info } = await buildPipeline(input, cfg, format, { width, height, quality, animated })
     .toBuffer({ resolveWithObject: true });
   return { data, info, quality };
 }
 
-function buildPipeline(input, cfg, format, { width, height, quality }) {
-  let pipeline = sharp(input, cfg.density ? { density: cfg.density } : undefined);
+function buildPipeline(input, cfg, format, { width, height, quality, animated = false }) {
+  let pipeline = sharp(input, {
+    ...(cfg.density ? { density: cfg.density } : {}),
+    ...(animated ? { animated: true } : {}),
+  });
 
   if (cfg.rotate != null) pipeline = pipeline.rotate(cfg.rotate, { background: cfg.background });
   else if (cfg.autoOrient) pipeline = pipeline.rotate();

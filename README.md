@@ -2,7 +2,7 @@
 
 **Bulk image compression and transcoding.** Point it at a file, a folder, or a
 glob; get AVIF, WebP, JPEG, or PNG at responsive widths with sensible quality,
-a cache, a manifest, and ready-to-paste `<picture>` snippets.
+a cache, a manifest, an HTML report, and ready-to-paste `<picture>` snippets.
 
 ```bash
 npx pixelpress "public/images/**/*.{jpg,png}" -o dist/images \
@@ -50,6 +50,12 @@ pixelpress photos -o dist -r --watch
 # Generate markup that points at the output
 pixelpress photos -o dist -r -w 480,960,1600 \
   --picture dist/picture.html --public-path /images
+
+# A visual before/after report
+pixelpress photos -o dist -r --report dist/report.html
+
+# One image through a pipe
+cat photo.jpg | pixelpress - -f webp --stdout > photo.webp
 ```
 
 Output mirrors the input by default:
@@ -180,6 +186,7 @@ reported as failed instead of writing an oversized output. Lossless and
 | --- | --- | --- |
 | `--manifest <file>` | none | Write a JSON report of every variant. |
 | `--picture <file>` | none | Write `<picture>` snippets for every input. |
+| `--report <file>` | none | Write a self-contained visual HTML report. |
 | `--public-path <path>` | `/` | URL prefix used in snippets. |
 | `--sizes <value>` | `100vw` | `sizes` attribute used in snippets. |
 | `--lqip` | off | Add a tiny WebP data-URI placeholder + dominant color. |
@@ -189,6 +196,7 @@ reported as failed instead of writing an oversized output. Lossless and
 | `--fail-fast` | off | Stop after the first failed file. |
 | `--concurrency <n>` | 4 | Files processed in parallel. |
 | `--dry-run` | off | Show the plan; write nothing. |
+| `--stdout` | off | Write one encoded image to stdout. |
 | `--json` | off | Print the full report as JSON. |
 | `--quiet` | off | Only print the summary. |
 | `--verbose` | off | Print every variant. |
@@ -214,6 +222,7 @@ Put defaults in `pixelpress.config.json` and run `pixelpress` with no inputs:
   "lqip": true,
   "manifest": "public/images.json",
   "picture": "src/_includes/picture.html",
+  "report": "public/images-report.html",
   "publicPath": "/images",
   "sizes": "(max-width: 900px) 100vw, 900px"
 }
@@ -236,7 +245,8 @@ CLI flags override config values. Config keys are the same as the
 working directory. JSON is recommended for portability.
 
 `--watch` cannot be combined with `--json`, `--dry-run`, or `--clean`.
-`--dry-run` writes neither images nor any requested manifest or picture file.
+`--dry-run` writes neither images nor any requested manifest, picture, or
+report file.
 
 ## Caching and watch mode
 
@@ -270,9 +280,10 @@ CI or when in doubt.
 pre-hero-2x-960-a1b2c3d4.avif
 ```
 
-`--manifest` writes every input, variant, dimension, byte count, and quality.
-`--lqip` adds `placeholder` (a base64 WebP data URI) and `dominantColor` to
-each file entry. Paths are relative to the current directory.
+`--manifest` writes every input, variant, dimension, byte count, quality,
+animation frame count, and cache state. `--lqip` adds `placeholder` (a base64
+WebP data URI) and `dominantColor` to each file entry. Paths are relative to
+the current directory.
 
 ```json
 {
@@ -335,6 +346,52 @@ fallback and adding the other formats as `<source>`:
 ```
 
 Edit `alt` afterwards; snippets intentionally start with an empty value.
+
+## HTML report
+
+`--report` writes a self-contained page with every source and output side by
+side, byte savings, dimensions, quality, frame counts, and cache state. It has
+no external assets or network requests; open the file directly in a browser.
+
+```bash
+pixelpress photos -o dist -r --report dist/report.html
+open dist/report.html
+```
+
+Previews link to files relative to the report, so the report can live next to
+the output or elsewhere on disk. `--report` is skipped by `--dry-run` and
+rewritten on every `--watch` run. It can be set as `report` in the config file.
+
+## stdin and stdout
+
+Use `-` as the input and `--stdout` (or `-o -`) for a single image through a
+pipe. Logs go to stderr, so stdout is pure image data.
+
+```bash
+pixelpress photo.jpg -f avif --stdout > photo.avif
+cat photo.jpg | pixelpress - -f webp --stdout > photo.webp
+curl -s https://example.com/cat.jpg | pixelpress - -f webp -q 60 --stdout > cat.webp
+```
+
+In stream mode, use exactly one input and one format. `--formats` defaults to
+`webp` here. Use `--width`/`--height` instead of `--widths`; all transforms,
+quality/effort settings, `--max-bytes`, `--lossless`, and metadata options
+apply. `--stdout` cannot be combined with an output directory (`-o` other than
+`-`), `--watch`, `--clean`, `--dry-run`, `--json`, `--manifest`, `--picture`,
+or `--report`.
+
+## Animated images
+
+Animated GIF and WebP inputs are supported:
+
+- **WebP output preserves all frames**, including resized width variants.
+- **AVIF, JPEG, and PNG output use the first frame** as a static fallback.
+- `<picture>` snippets put the animated WebP source first, with a static
+  format as the fallback.
+- `--lqip` uses the first frame for its placeholder.
+
+Use `-f webp` when animation must be preserved. Animated AVIF output is not
+supported by the current sharp/libvips build; it is on the roadmap.
 
 ## API
 
@@ -401,8 +458,8 @@ same transforms, format tuning, and size budget as `optimize`.
 - **Metadata is stripped by default** (including GPS); pass `--keep-metadata`
   to retain EXIF/ICC. EXIF orientation is applied even when metadata is stripped.
 - **Transparent JPEGs** are flattened onto `--background`.
-- **Animated images are skipped** with a reason. Frame-preserving output is on
-  the roadmap.
+- **Animated GIF/WebP inputs** preserve frames in WebP; AVIF/JPEG/PNG use the
+  first frame as a static fallback.
 - **SVG inputs are rasterized**, not minified. Run SVGO first if you need that.
 - **`--clean` is guarded**: it refuses the filesystem root, the home directory,
   the current directory, ancestors of the current directory, and any directory

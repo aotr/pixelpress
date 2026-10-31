@@ -135,6 +135,10 @@ export interface Variant {
   bytes: number | null;
   /** Quality actually used (lowered by maxBytes when needed). */
   quality: number;
+  /** True when the output preserves animation (WebP only). */
+  animated: boolean;
+  /** Frame count for animated outputs, otherwise 1. */
+  pages: number;
 }
 
 export interface ProcessedFile {
@@ -244,6 +248,10 @@ export interface TranscodeResult {
     height: number;
     bytes: number;
     quality: number;
+    /** True when frames were preserved (animated WebP output). */
+    animated: boolean;
+    /** Frame count for animated outputs, otherwise 1. */
+    pages: number;
     sourceWidth: number | null;
     sourceHeight: number | null;
   };

@@ -73,22 +73,32 @@ background matte.
 ### Workflow
 
 `--json`, `--dry-run`, `--quiet`, `--verbose`, `--fail-fast`,
-`--concurrency`, nameable manifests, config-driven runs.
+`--concurrency`, nameable manifests, config-driven runs, HTML reports, and
+stdin/stdout piping.
 
-## 0.3
+## 0.3 — shipped
 
-- **Animated inputs**: preserve frames for GIF/WebP/AVIF; per-frame resize,
-  frame delay, loop count, min/max frame errors.
+- **Animated WebP**: frames are preserved for animated GIF/WebP inputs,
+  including resized width variants. AVIF/JPEG/PNG use the first frame as a
+  static fallback. `<picture>` puts the animated source first.
+- **HTML report**: `--report` writes a self-contained before/after gallery with
+  byte deltas, dimensions, quality, frames, and cache state.
+- **stdin/stdout**: `cat image.png | pixelpress - -f webp --stdout > out.webp`,
+  with all transforms and size budgets intact.
+- Cache version bumped for the new output shape.
+
+## 0.4
+
+- **Animated AVIF** when sharp/libvips exposes reliable frame output.
 - **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
   `--max-bytes`.
 - **Framework adapters**: Vite plugin, Next.js loader, Astro integration.
-- **HTML report**: a visual before/after gallery with byte deltas.
-- **stdin/stdout mode**: `cat image.png | pixelpress -f webp > out.webp` without
-  temp files.
 - **Plugin hooks**: optional pre/post transform functions for the API (e.g.
   watermarking).
 - **Better watch fallback**: chokidar-style recursive watching on platforms
   without recursive `fs.watch`, plus config-file reloads.
+- **Partial-run recovery**: clean up half-written variants when one format in a
+  multi-format run fails.
 
 ## Non-goals
 
@@ -99,9 +109,10 @@ background matte.
 
 ## Quality bar
 
-- 23 `node:test` cases cover API, globs, filters, quality, transforms, max
-  bytes, cache invalidation, clean safety, LQIP, config, srcset, collisions,
-  alpha flattening, EXIF orientation, and CLI behavior.
+- 24 `node:test` cases cover API, globs, filters, quality, transforms, max
+  bytes, cache invalidation, clean safety, LQIP, config, srcset, animated
+  frames, reports, stdout, collisions, alpha flattening, EXIF orientation, and
+  CLI behavior.
 - Every option appears in `--help` and the README.
 - Dry runs touch nothing. Clean refuses unsafe paths. Output never overwrites
   an input.
