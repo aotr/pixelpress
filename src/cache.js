@@ -53,9 +53,13 @@ export async function saveCache(cache, entries) {
     generatedAt: new Date().toISOString(),
     files: entries,
   };
-  await fs.mkdir(path.dirname(cache.file), { recursive: true });
-  await writeFileAtomic(cache.file, `${JSON.stringify(payload)}\n`);
-  if (cache.legacyFile) await fs.rm(cache.legacyFile, { force: true });
+  try {
+    await fs.mkdir(path.dirname(cache.file), { recursive: true });
+    await writeFileAtomic(cache.file, `${JSON.stringify(payload)}\n`);
+    if (cache.legacyFile) await fs.rm(cache.legacyFile, { force: true });
+  } catch {
+    // The cache is an optimization; never fail a successful image run for it.
+  }
 }
 
 async function readPack(file) {

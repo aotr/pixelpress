@@ -104,6 +104,8 @@ stdin/stdout piping.
   `--provenance`; configure the trusted publisher on npmjs.com first.
 - **0.4.1**: failed runs keep stale cache entries so a later `--prune` can
   still remove their old outputs.
+- **0.4.2**: cache writes are best-effort; a read-only or full cache directory
+  never fails an otherwise successful image run.
 
 ## 0.5
 
