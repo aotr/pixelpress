@@ -117,6 +117,12 @@ stdin/stdout piping.
   strings per format.
 - **Partial-run recovery**: newly created outputs are rolled back when a
   multi-format file fails; previously existing outputs keep their new version.
+- **Website**: branded docs, command builder, and API reference at
+  <https://aotr.github.io/pixelpress/>.
+
+## 0.5.1
+
+- Package homepage and README now point at the GitHub Pages site.
 
 ## 0.6
 
