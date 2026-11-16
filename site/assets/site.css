@@ -121,6 +121,8 @@ button { cursor: pointer; }
 }
 .hero-lede { max-width: 590px; margin: 0 0 28px; font-size: clamp(1rem, 1.5vw, 1.22rem); color: #38342c; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.hero-note { margin: 14px 0 0; max-width: 520px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.hero-note strong { color: var(--ink); }
 .hero-meta { display: flex; flex-wrap: wrap; gap: 7px 16px; margin-top: 24px; font: 11px/1.4 var(--mono); color: var(--muted); }
 .hero-meta span { display: inline-flex; align-items: center; gap: 6px; }
 .hero-meta span::before { content: "•"; color: var(--hot); }

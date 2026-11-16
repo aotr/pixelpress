@@ -30,9 +30,11 @@ Node.js 22.5+. One runtime dependency: `sharp`.
 ## Install
 
 ```bash
-npm install --save-dev pixelpress
-# or use it without installing
+# use it without installing
 npx pixelpress --help
+
+# or add it to the project
+npm install --save-dev pixelpress
 ```
 
 ## Quick start
