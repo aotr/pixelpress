@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Examples — pixelpress</title>
+<meta name="description" content="pixelpress recipes: responsive sets, social cards, animated WebP, byte budgets, cache and prune, manifests, picture snippets, reports, stdout, and API usage.">
+<meta name="theme-color" content="#f2ede2">
+<meta property="og:title" content="pixelpress examples and command builder">
+<meta property="og:description" content="Build a command, then copy it. Real recipes for the way images ship.">
+<meta property="og:type" content="article">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="shell nav-inner">
+    <a class="brand" href="./" aria-label="pixelpress home">
+      <img src="assets/logo.svg" alt="" width="30" height="30"><span>pixelpress</span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav id="site-nav" class="nav-links" aria-label="Main">
+      <a href="./">Overview</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html">API</a>
+      <a href="examples.html" aria-current="page">Examples</a>
+      <a class="nav-ext" href="https://github.com/aotr/pixelpress">GitHub ↗</a>
+      <a class="nav-ext" href="https://www.npmjs.com/package/pixelpress">npm ↗</a>
+    </nav>
+    <span class="version-pill">v0.5.0</span>
+  </div>
+</header>
+
+<main id="main">
+  <div class="docs-hero">
+    <div class="shell">
+      <div class="eyebrow">Examples</div>
+      <h1>Build a command.<br>Copy it.</h1>
+      <p>Start from a real recipe. The builder writes the CLI, the Node API, and the config file for the same job.</p>
+    </div>
+  </div>
+
+  <section class="section tight">
+    <div class="shell">
+      <div class="builder" data-builder>
+        <div class="builder-form">
+          <div class="builder-field">
+            <label for="b-preset">Preset</label>
+            <select id="b-preset">
+              <option value="">none — explicit only</option>
+              <option value="web">web — AVIF + WebP, 480/960/1920</option>
+              <option value="thumb">thumb — WebP 400</option>
+              <option value="social">social — 1200×630 JPEG + WebP</option>
+              <option value="lossless">lossless — PNG + WebP</option>
+            </select>
+          </div>
+          <div class="builder-field">
+            <label for="b-formats">Formats</label>
+            <input id="b-formats" value="avif,webp" spellcheck="false">
+          </div>
+          <div class="builder-field">
+            <label for="b-widths">Widths</label>
+            <input id="b-widths" value="480,960,1920" spellcheck="false">
+          </div>
+          <div class="builder-field">
+            <span>Extras</span>
+            <div class="builder-checks">
+              <label><input type="checkbox" id="b-hash"> hash</label>
+              <label><input type="checkbox" id="b-prune"> prune</label>
+              <label><input type="checkbox" id="b-lqip"> lqip</label>
+              <label><input type="checkbox" id="b-report"> report</label>
+            </div>
+          </div>
+          <p class="muted" style="font-size:12px;margin:2px 0 0;">The example input is <code>public/images/**/*.{jpg,png}</code>. Change the path in the generated code. Report is CLI-only.</p>
+        </div>
+
+        <div class="builder-out" data-tab-scope>
+          <div class="builder-tabs" data-tabs role="tablist" aria-label="Generated output">
+            <button type="button" role="tab" aria-selected="true" data-tab="cli">CLI</button>
+            <button type="button" role="tab" aria-selected="false" data-tab="api">Node API</button>
+            <button type="button" role="tab" aria-selected="false" data-tab="config">Config</button>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span>generated</span><button class="copy" id="b-copy" type="button">Copy</button></div>
+            <pre id="b-cli" data-panel="cli" class="active"></pre>
+            <pre id="b-api" data-panel="api"></pre>
+            <pre id="b-config" data-panel="config"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="shell">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Recipes</div>
+          <h2>Jobs people<br>actually run.</h2>
+        </div>
+        <p>Small commands, complete output. Every recipe can be combined with the cache, report, and manifest options.</p>
+      </div>
+
+      <div class="recipe-grid">
+        <article class="card recipe">
+          <span class="tag">Responsive</span>
+          <h3>The web set.</h3>
+          <p>AVIF + WebP at three widths, with a manifest and picture snippets.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-web">Copy</button></div>
+            <pre id="recipe-web">pixelpress "assets/**/*.{jpg,png}" -o dist -r \
+  --preset web \
+  --manifest dist/images.json \
+  --picture dist/picture.html --public-path /images</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Social</span>
+          <h3>One card. Two formats.</h3>
+          <p>1200×630 cover crop, JPEG + WebP, and a local report to check the crop.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-social">Copy</button></div>
+            <pre id="recipe-social">pixelpress og-source.jpg -o social \
+  --preset social \
+  --report social/report.html</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Thumbnails</span>
+          <h3>One size, many files.</h3>
+          <p>A 400px WebP thumbnail tree with hashed filenames for immutable caching.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-thumb">Copy</button></div>
+            <pre id="recipe-thumb">pixelpress products -o dist/thumbs -r \
+  --preset thumb --hash --cache --prune</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Budget</span>
+          <h3>Fit 120 KB or fail.</h3>
+          <p>Quality searches down per variant. If quality 1 cannot fit, the file is reported as failed.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-budget">Copy</button></div>
+            <pre id="recipe-budget">pixelpress hero.jpg -o dist \
+  -f avif,webp -q avif=70,webp=85 \
+  --max-bytes 120kb</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Animation</span>
+          <h3>Keep the frames.</h3>
+          <p>WebP output preserves animation. Use it before static AVIF/JPEG fallbacks in <code>&lt;picture&gt;</code>.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-animation">Copy</button></div>
+            <pre id="recipe-animation">pixelpress loop.gif -o dist \
+  -f webp -w 320,640 --hash</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Watch</span>
+          <h3>Clean while you work.</h3>
+          <p>Cache makes reruns cheap; prune removes retired widths and deleted sources; watch keeps going.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-watch">Copy</button></div>
+            <pre id="recipe-watch">pixelpress public/images -o dist -r \
+  --preset web --cache --prune --watch</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Ship</span>
+          <h3>Manifest, picture, report.</h3>
+          <p>Everything a template or review needs, from one run.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-ship">Copy</button></div>
+            <pre id="recipe-ship">pixelpress photos -o dist -r \
+  --preset web --lqip \
+  --manifest dist/images.json \
+  --picture dist/picture.html --public-path /images \
+  --report dist/report.html</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Pipe</span>
+          <h3>No temp files.</h3>
+          <p>One image in, one image out. Logs stay on stderr.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-pipe">Copy</button></div>
+            <pre id="recipe-pipe">cat photo.jpg \
+  | pixelpress - -f webp --width 1200 --stdout \
+  > photo.webp</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">Config</span>
+          <h3>Set it once.</h3>
+          <p>Scaffold a config, edit the paths, and run with no arguments.</p>
+          <div class="code">
+            <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#recipe-config">Copy</button></div>
+            <pre id="recipe-config">pixelpress --init
+# edit pixelpress.config.json
+pixelpress</pre>
+          </div>
+        </article>
+
+        <article class="card recipe">
+          <span class="tag">API</span>
+          <h3>Build it in Node.</h3>
+          <p>Same options, absolute result paths, explicit failures.</p>
+          <div class="code">
+            <div class="code-bar"><span>build.js</span><button class="copy" type="button" data-copy="#recipe-api">Copy</button></div>
+            <pre id="recipe-api">import { optimize } from 'pixelpress';
+
+const report = await optimize(['public/images'], {
+  outDir: 'dist/images',
+  preset: 'web',
+  cache: true,
+  prune: true,
+});
+
+if (report.failed.length) process.exitCode = 1;</pre>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section alt">
+    <div class="shell split">
+      <div>
+        <div class="eyebrow">Output tree</div>
+        <h2>Predictable<br>by default.</h2>
+        <p>Mirror the source tree, append width and hash suffixes, and keep format subdirectories out of the way. Every path in a manifest is relative to the directory you ran from.</p>
+      </div>
+      <div class="code">
+        <div class="code-bar"><span>dist/</span><button class="copy" type="button" data-copy="#tree-code">Copy</button></div>
+        <pre id="tree-code">dist/
+  images/
+    hero-480.avif
+    hero-480.webp
+    hero-960.avif
+    hero-960.webp
+    team/
+      ana-480.avif
+      ana-480.webp
+  images.json
+  picture.html
+  report.html</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="shell">
+      <div class="cta">
+        <div>
+          <h2>Ready for your tree?</h2>
+          <p>Copy a recipe, change the paths, and run it. The CLI and API are waiting.</p>
+        </div>
+        <div class="cta-actions">
+          <a class="btn" href="cli.html">CLI reference <span aria-hidden="true">→</span></a>
+          <a class="btn secondary" href="api.html">Node API</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="shell">
+    <div class="footer-grid">
+      <div>
+        <a class="footer-brand" href="./"><img src="assets/logo.svg" alt="" width="28" height="28">pixelpress</a>
+        <p>Bulk image compression for the web. Built on sharp. MIT licensed.</p>
+      </div>
+      <div class="footer-col">
+        <b>Docs</b>
+        <a href="cli.html">CLI reference</a>
+        <a href="api.html">Node API</a>
+        <a href="examples.html">Examples</a>
+        <a href="cli.html#config">Config + schema</a>
+      </div>
+      <div class="footer-col">
+        <b>Project</b>
+        <a href="https://github.com/aotr/pixelpress">GitHub</a>
+        <a href="https://www.npmjs.com/package/pixelpress">npm</a>
+        <a href="https://github.com/aotr/pixelpress/blob/master/PLAN.md">Roadmap</a>
+        <a href="https://github.com/aotr/pixelpress/blob/master/COMPARISON.md">Comparison</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span data-year>2026</span> Animesh Chakraborty · MIT</span>
+      <span>v0.5.0 · Node 22.5+</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

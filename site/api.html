@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Node API — pixelpress</title>
+<meta name="description" content="Use pixelpress from Node: optimize() for batches and transcode() for single buffers, with the same presets, transforms, budgets, cache, and failure reporting as the CLI.">
+<meta name="theme-color" content="#f2ede2">
+<meta property="og:title" content="pixelpress Node API">
+<meta property="og:description" content="Batch optimize() and single-image transcode(), with typed options and build-friendly results.">
+<meta property="og:type" content="article">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="shell nav-inner">
+    <a class="brand" href="./" aria-label="pixelpress home">
+      <img src="assets/logo.svg" alt="" width="30" height="30"><span>pixelpress</span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav id="site-nav" class="nav-links" aria-label="Main">
+      <a href="./">Overview</a>
+      <a href="cli.html">CLI</a>
+      <a href="api.html" aria-current="page">API</a>
+      <a href="examples.html">Examples</a>
+      <a class="nav-ext" href="https://github.com/aotr/pixelpress">GitHub ↗</a>
+      <a class="nav-ext" href="https://www.npmjs.com/package/pixelpress">npm ↗</a>
+    </nav>
+    <span class="version-pill">v0.5.0</span>
+  </div>
+</header>
+
+<main id="main">
+  <div class="docs-hero">
+    <div class="shell">
+      <div class="eyebrow">Node API</div>
+      <h1>One engine.<br>No shell tax.</h1>
+      <p>Build the same output tree from Node. Batches, buffers, transforms, budgets, cache, and explicit failures — all typed.</p>
+    </div>
+  </div>
+
+  <div class="shell docs-layout">
+    <nav class="docs-nav" aria-label="On this page">
+      <b>On this page</b>
+      <a href="#install">Install</a>
+      <a href="#optimize">optimize()</a>
+      <a href="#result">Result shape</a>
+      <a href="#transcode">transcode()</a>
+      <a href="#options">Options</a>
+      <a href="#failures">Failures</a>
+      <a href="#types">TypeScript</a>
+      <a href="#recipes">Recipes</a>
+    </nav>
+
+    <div class="docs-content">
+      <section id="install">
+        <h2>Install &amp; import</h2>
+        <div class="code">
+          <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#api-install">Copy</button></div>
+          <pre id="api-install">npm install --save-dev pixelpress</pre>
+        </div>
+        <div class="code">
+          <div class="code-bar"><span>ESM</span><button class="copy" type="button" data-copy="#api-import">Copy</button></div>
+          <pre id="api-import">import { optimize, transcode } from 'pixelpress';</pre>
+        </div>
+        <p>Requires Node.js 22.5+. Type declarations ship with the package. The cache is off by default in the API; the CLI enables it.</p>
+      </section>
+
+      <section id="optimize">
+        <h2>optimize(inputs, options)</h2>
+        <p>Process files, directories, or globs. Every path in the result is absolute. Processing continues after a single file fails unless <code>failFast</code> is set.</p>
+        <div class="code">
+          <div class="code-bar"><span>build.js</span><button class="copy" type="button" data-copy="#optimize-code">Copy</button></div>
+          <pre id="optimize-code">import { optimize } from 'pixelpress';
+
+const report = await optimize(
+  ['public/images', 'static/**/*.png'],
+  {
+    outDir: 'dist/images',
+    preset: 'web',
+    formats: ['avif', 'webp', 'jpeg'],
+    widths: [480, 960, 1920],
+    quality: { avif: 50, webp: 72 },
+    include: ['*.jpg', '*.png'],
+    exclude: ['*-draft.*'],
+    recursive: true,
+    cache: true,
+    cacheDir: 'node_modules/.cache/pixelpress',
+    prune: true,
+    lqip: true,
+    concurrency: 8,
+  },
+);
+
+console.log(report.totals.savedPercent, '% smaller');
+console.log(report.totals.cached, 'files reused');
+for (const file of report.files) {
+  for (const variant of file.outputs) {
+    console.log(variant.format, variant.path, variant.width, variant.bytes);
+  }
+}</pre>
+        </div>
+        <p>Explicit options override a preset. <code>prune</code> requires <code>cache: true</code>. Use <code>failFast</code> to stop after the first failure, or inspect <code>report.failed</code> and keep the successful files.</p>
+      </section>
+
+      <section id="result">
+        <h2>Result shape</h2>
+        <div class="code">
+          <div class="code-bar"><span>report</span><button class="copy" type="button" data-copy="#result-code">Copy</button></div>
+          <pre id="result-code">{
+  options: { outDir, preset, formats, widths, quality, ... },
+  files: [
+    {
+      input: '/abs/public/images/hero.jpg',
+      width: 2400,
+      height: 1600,
+      sourceBytes: 1436544,
+      cached: false,
+      placeholder: 'data:image/webp;base64,...', // --lqip
+      dominantColor: '#6c7a89',                  // --lqip
+      outputs: [
+        {
+          format: 'avif',
+          path: '/abs/dist/images/hero-480.avif',
+          width: 480,
+          height: 320,
+          bytes: 14210,
+          quality: 55,
+          animated: false,
+          pages: 1,
+        },
+      ],
+    },
+  ],
+  skipped: [],
+  failed: [],
+  pruned: [],
+  pruneErrors: [],
+  totals: {
+    files: 1,
+    outputs: 1,
+    cached: 0,
+    pruned: 0,
+    pruneErrors: 0,
+    sourceBytes: 1436544,
+    outputBytes: 14210,
+    savedBytes: 1422244,
+    savedPercent: 99,
+    skipped: 0,
+    failed: 0,
+    durationMs: 342,
+  },
+}</pre>
+        </div>
+        <p>For a manifest with <code>srcset</code> strings and relative paths, use the CLI's <code>--manifest</code> or build from this result.</p>
+      </section>
+
+      <section id="transcode">
+        <h2>transcode(input, options)</h2>
+        <p>Encode one image from a path, <code>Buffer</code>, or <code>Uint8Array</code>. Useful for upload handlers and serverless jobs. The same transforms, format tuning, and size budget apply.</p>
+        <div class="code">
+          <div class="code-bar"><span>upload.js</span><button class="copy" type="button" data-copy="#transcode-code">Copy</button></div>
+          <pre id="transcode-code">import { transcode } from 'pixelpress';
+import { writeFile } from 'node:fs/promises';
+
+const { data, info } = await transcode('upload.jpg', {
+  format: 'avif',
+  width: 800,
+  quality: 50,
+  maxBytes: 90_000,
+  grayscale: false,
+  keepMetadata: false,
+});
+
+await writeFile('upload.avif', data);
+// info: { format, width, height, bytes, quality, animated, pages,
+//         sourceWidth, sourceHeight }</pre>
+        </div>
+        <p>For animated inputs, WebP preserves frames; AVIF/JPEG/PNG return the first frame. <code>maxBytes</code> performs a quality search and throws if the variant cannot fit.</p>
+      </section>
+
+      <section id="options">
+        <h2>Options</h2>
+        <p>The option names match the CLI flags. The full table lives in the <a href="cli.html">CLI reference</a>; the machine-readable schema is at <a href="https://github.com/aotr/pixelpress/blob/master/pixelpress.schema.json"><code>pixelpress.schema.json</code></a>.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Group</th><th>Options</th></tr></thead>
+            <tbody>
+              <tr><td>Run</td><td><code>outDir, formats, preset, widths, recursive, flat, include, exclude, followSymlinks, concurrency, dryRun, cache, cacheDir, prune, force, failFast, clean, preserveDates</code></td></tr>
+              <tr><td>Resize</td><td><code>width, height, fit, position, enlarge</code></td></tr>
+              <tr><td>Transform</td><td><code>rotate, autoOrient, flip, flop, grayscale, blur, sharpen, normalize, gamma, tint, trim, extract, extend, density</code></td></tr>
+              <tr><td>Encode</td><td><code>quality, effort, lossless, progressive, chromaSubsampling, alphaQuality, palette, compressionLevel, maxBytes, background, keepMetadata</code></td></tr>
+              <tr><td>Naming</td><td><code>prefix, suffix, hash</code></td></tr>
+              <tr><td>Derived assets</td><td><code>lqip</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Presets: <code>web</code>, <code>thumb</code>, <code>social</code>, <code>lossless</code>. Explicit options override them. Quality and effort objects merge with preset values.</p>
+      </section>
+
+      <section id="failures">
+        <h2>Failures &amp; retries</h2>
+        <p>Per-file failures appear in <code>report.failed</code> as <code>{ input, error }</code>. Successful files still land. Newly created outputs for a failed multi-format file are rolled back; outputs that existed before the run are kept.</p>
+        <p><code>--fail-fast</code> / <code>failFast: true</code> stops after the first failure. A prune deletion failure appears in <code>pruneErrors</code> and keeps the old cache so the next run can retry. The CLI exits <code>1</code> on any failure.</p>
+        <div class="code">
+          <div class="code-bar"><span>node</span><button class="copy" type="button" data-copy="#failure-code">Copy</button></div>
+          <pre id="failure-code">const report = await optimize(['uploads'], {
+  outDir: 'dist/uploads',
+  formats: ['webp'],
+  cache: true,
+});
+
+if (report.failed.length) {
+  for (const item of report.failed) {
+    console.error(item.input, item.error);
+  }
+  process.exitCode = 1;
+}</pre>
+        </div>
+      </section>
+
+      <section id="types">
+        <h2>TypeScript</h2>
+        <p>Declarations are included. Main types: <code>OptimizeOptions</code>, <code>OptimizeResult</code>, <code>ProcessedFile</code>, <code>Variant</code>, <code>TranscodeOptions</code>, <code>TranscodeResult</code>, and <code>PresetName</code>.</p>
+        <div class="code">
+          <div class="code-bar"><span>types.ts</span><button class="copy" type="button" data-copy="#types-code">Copy</button></div>
+          <pre id="types-code">import type { OptimizeResult, Variant } from 'pixelpress';
+
+const variants: Variant[] = report.files.flatMap((file) => file.outputs);
+function summarize(result: OptimizeResult) {
+  return result.totals.savedPercent ?? 0;
+}</pre>
+        </div>
+      </section>
+
+      <section id="recipes">
+        <h2>Recipes</h2>
+        <div class="cards">
+          <article class="card">
+            <span class="tag">Uploads</span>
+            <h3>Buffer in, WebP out.</h3>
+            <p>Call <code>transcode(buffer, { format: 'webp', maxBytes })</code> before writing storage.</p>
+          </article>
+          <article class="card">
+            <span class="tag">Builds</span>
+            <h3>Prune the output tree.</h3>
+            <p>Enable <code>cache</code> + <code>prune</code> so removed sources and retired widths disappear.</p>
+          </article>
+          <article class="card">
+            <span class="tag">CI</span>
+            <h3>Fail the build.</h3>
+            <p>Check <code>report.failed</code> and <code>pruneErrors</code>, then set a non-zero exit code.</p>
+          </article>
+        </div>
+        <p>More end-to-end examples: <a href="examples.html">Recipes &amp; command builder →</a></p>
+      </section>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="shell">
+    <div class="footer-grid">
+      <div>
+        <a class="footer-brand" href="./"><img src="assets/logo.svg" alt="" width="28" height="28">pixelpress</a>
+        <p>Bulk image compression for the web. Built on sharp. MIT licensed.</p>
+      </div>
+      <div class="footer-col">
+        <b>Docs</b>
+        <a href="cli.html">CLI reference</a>
+        <a href="api.html">Node API</a>
+        <a href="examples.html">Examples</a>
+        <a href="cli.html#config">Config + schema</a>
+      </div>
+      <div class="footer-col">
+        <b>Project</b>
+        <a href="https://github.com/aotr/pixelpress">GitHub</a>
+        <a href="https://www.npmjs.com/package/pixelpress">npm</a>
+        <a href="https://github.com/aotr/pixelpress/blob/master/PLAN.md">Roadmap</a>
+        <a href="https://github.com/aotr/pixelpress/blob/master/COMPARISON.md">Comparison</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span data-year>2026</span> Animesh Chakraborty · MIT</span>
+      <span>v0.5.0 · Node 22.5+</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

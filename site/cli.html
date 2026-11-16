@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLI reference — pixelpress</title>
+<meta name="description" content="Complete pixelpress command-line reference: globs, presets, responsive widths, transforms, encoding, cache, prune, watch, reports, and configuration.">
+<meta name="theme-color" content="#f2ede2">
+<meta property="og:title" content="pixelpress CLI reference">
+<meta property="og:description" content="Every command-line option, example, and default.">
+<meta property="og:type" content="article">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="shell nav-inner">
+    <a class="brand" href="./" aria-label="pixelpress home">
+      <img src="assets/logo.svg" alt="" width="30" height="30"><span>pixelpress</span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav id="site-nav" class="nav-links" aria-label="Main">
+      <a href="./">Overview</a>
+      <a href="cli.html" aria-current="page">CLI</a>
+      <a href="api.html">API</a>
+      <a href="examples.html">Examples</a>
+      <a class="nav-ext" href="https://github.com/aotr/pixelpress">GitHub ↗</a>
+      <a class="nav-ext" href="https://www.npmjs.com/package/pixelpress">npm ↗</a>
+    </nav>
+    <span class="version-pill">v0.5.0</span>
+  </div>
+</header>
+
+<main id="main">
+  <div class="docs-hero">
+    <div class="shell">
+      <div class="eyebrow">Reference</div>
+      <h1>CLI, without<br>the guesswork.</h1>
+      <p>Every flag, default, and behavior. Start with a preset, then override only what you need.</p>
+    </div>
+  </div>
+
+  <div class="shell docs-layout">
+    <nav class="docs-nav" aria-label="On this page">
+      <b>On this page</b>
+      <a href="#install">Install</a>
+      <a href="#quick-start">Quick start</a>
+      <a href="#presets">Presets</a>
+      <a href="#input">Input &amp; bulk</a>
+      <a href="#output">Output &amp; naming</a>
+      <a href="#transforms">Transforms</a>
+      <a href="#encoding">Encoding</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#cache">Cache, prune, watch</a>
+      <a href="#config">Config &amp; schema</a>
+      <a href="#environment">Environment</a>
+    </nav>
+
+    <div class="docs-content">
+      <section id="install">
+        <h2>Install</h2>
+        <p>Node.js 22.5 or newer. The only runtime dependency is <code>sharp</code>.</p>
+        <div class="code">
+          <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#install-code">Copy</button></div>
+          <pre id="install-code">npm install --save-dev pixelpress
+# or run it without installing
+npx pixelpress --help</pre>
+        </div>
+        <div class="note">Use the CLI in a project or on a build box. The API is the same engine; see <a href="api.html">Node API</a>.</div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <div class="code">
+          <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#quick-code">Copy</button></div>
+          <pre id="quick-code"># One image, three widths
+pixelpress hero.jpg -o dist -w 480,960,1920
+
+# A whole tree, keeping structure
+pixelpress public/images -o dist/images -r
+
+# Glob input and a preset
+pixelpress "assets/**/*.{jpg,png}" -o dist -r --preset web
+
+# Pipe one image through stdout
+cat photo.jpg | pixelpress - -f webp --stdout > photo.webp</pre>
+        </div>
+        <p>Output mirrors the input tree. With <code>--widths</code>, the width is appended: <code>hero-480.avif</code>, <code>hero-960.avif</code>. Widths larger than the source are skipped unless <code>--enlarge</code> is set.</p>
+      </section>
+
+      <section id="presets">
+        <h2>Presets</h2>
+        <p>Presets are starting points. Any explicit flag overrides them — formats, widths, quality, fit, and so on.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Preset</th><th>Formats</th><th>Size</th><th>Defaults</th></tr></thead>
+            <tbody>
+              <tr><td><code>web</code></td><td>AVIF, WebP</td><td>widths 480, 960, 1920</td><td>AVIF 50, WebP 72</td></tr>
+              <tr><td><code>thumb</code></td><td>WebP</td><td>width 400</td><td>WebP 72</td></tr>
+              <tr><td><code>social</code></td><td>JPEG, WebP</td><td>1200 × 630 cover</td><td>JPEG 82, WebP 78</td></tr>
+              <tr><td><code>lossless</code></td><td>PNG, WebP</td><td>original size</td><td>lossless, PNG palette off</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="code">
+          <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#preset-code">Copy</button></div>
+          <pre id="preset-code">pixelpress products -o dist -r --preset web
+pixelpress og.jpg -o social --preset social
+pixelpress icons -o dist -r --preset lossless
+# Preset + override: keep qualities, replace widths
+pixelpress products -o dist -r --preset web --widths 640,1280</pre>
+        </div>
+      </section>
+
+      <section id="input">
+        <h2>Input &amp; bulk</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Option</th><th>Default</th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>&lt;file|dir|glob...&gt;</code></td><td>required</td><td>Files, directories, or quoted globs. Node expands globs, not the shell.</td></tr>
+              <tr><td><code>-r, --recursive</code></td><td>off</td><td>Include subdirectories of directory inputs.</td></tr>
+              <tr><td><code>--include &lt;glob&gt;</code></td><td>all</td><td>Only process matching files. Repeatable.</td></tr>
+              <tr><td><code>--exclude &lt;glob&gt;</code></td><td>none</td><td>Skip matching files. Repeatable.</td></tr>
+              <tr><td><code>--follow-symlinks</code></td><td>off</td><td>Follow symlinked files and directories.</td></tr>
+              <tr><td><code>-c, --config &lt;file&gt;</code></td><td>auto</td><td>JSON or ESM config. Auto-loads <code>pixelpress.config.json</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Include/exclude patterns match both the path relative to the input root and the basename, so <code>--include "*.jpg"</code> catches nested JPEGs. With multiple directory/glob roots, outputs are prefixed by each root's basename; <code>--flat</code> drops the tree.</p>
+        <div class="code">
+          <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#filter-code">Copy</button></div>
+          <pre id="filter-code">pixelpress "assets/**/*.{jpg,png}" -o dist -r \
+  --include "products/**" --exclude "*-draft.*"
+
+pixelpress images -o dist -r --follow-symlinks
+pixelpress a b -o dist             # out/a/... and out/b/...</pre>
+        </div>
+      </section>
+
+      <section id="output">
+        <h2>Output &amp; naming</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Option</th><th>Default</th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>-o, --out &lt;dir&gt;</code></td><td><code>pixelpress-out</code></td><td>Output directory. Refuses to equal an input directory.</td></tr>
+              <tr><td><code>-f, --formats &lt;list&gt;</code></td><td><code>avif,webp</code></td><td>Any of <code>avif,webp,jpeg,png</code> (or <code>jpg</code>).</td></tr>
+              <tr><td><code>--preset &lt;name&gt;</code></td><td>none</td><td><code>web</code>, <code>thumb</code>, <code>social</code>, <code>lossless</code>.</td></tr>
+              <tr><td><code>-w, --widths &lt;list&gt;</code></td><td>source size</td><td>Responsive widths. Never upscales unless <code>--enlarge</code>.</td></tr>
+              <tr><td><code>--width &lt;px&gt;</code></td><td>none</td><td>Single resize width; not with <code>--widths</code>.</td></tr>
+              <tr><td><code>--height &lt;px&gt;</code></td><td>none</td><td>Single resize height; not with <code>--widths</code>.</td></tr>
+              <tr><td><code>--fit &lt;mode&gt;</code></td><td><code>inside</code></td><td><code>cover</code>, <code>contain</code>, <code>fill</code>, <code>inside</code>, <code>outside</code>.</td></tr>
+              <tr><td><code>--position &lt;pos&gt;</code></td><td><code>center</code></td><td>Crop gravity, e.g. <code>attention</code>, <code>entropy</code>, <code>right top</code>.</td></tr>
+              <tr><td><code>--enlarge</code></td><td>off</td><td>Allow upscaling.</td></tr>
+              <tr><td><code>--prefix &lt;text&gt;</code></td><td>none</td><td>Prepend to output filenames.</td></tr>
+              <tr><td><code>--suffix &lt;text&gt;</code></td><td>none</td><td>Append to output filenames.</td></tr>
+              <tr><td><code>--hash</code></td><td>off</td><td>Append an 8-character SHA-256 content hash.</td></tr>
+              <tr><td><code>--flat</code></td><td>off</td><td>Flatten output. Collisions are errors.</td></tr>
+              <tr><td><code>--clean</code></td><td>off</td><td>Delete output directory first; guarded against inputs/root/home/cwd.</td></tr>
+              <tr><td><code>--preserve-dates</code></td><td>off</td><td>Copy source timestamps onto outputs.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Name order is <code>&lt;prefix&gt;&lt;name&gt;&lt;suffix&gt;[-&lt;width&gt;][-&lt;hash&gt;].&lt;ext&gt;</code>. Prefix and suffix cannot contain path separators.</p>
+        <div class="code">
+          <div class="code-bar"><span>example output</span><button class="copy" type="button" data-copy="#name-code">Copy</button></div>
+          <pre id="name-code">pre-hero-2x-960-a1b2c3d4.avif
+pre-hero-2x-1920-a1b2c3d4.avif
+pre-hero-2x-960-a1b2c3d4.webp</pre>
+        </div>
+      </section>
+
+      <section id="transforms">
+        <h2>Transforms</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Option</th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>--rotate &lt;deg&gt;</code></td><td>Rotate by degrees. Overrides EXIF auto-orientation.</td></tr>
+              <tr><td><code>--no-auto-orient</code></td><td>Ignore EXIF orientation (on by default).</td></tr>
+              <tr><td><code>--flip</code>, <code>--flop</code></td><td>Flip vertically / horizontally.</td></tr>
+              <tr><td><code>--grayscale</code></td><td>Convert to grayscale.</td></tr>
+              <tr><td><code>--blur &lt;sigma&gt;</code></td><td>Gaussian blur.</td></tr>
+              <tr><td><code>--sharpen &lt;sigma&gt;</code></td><td>Sharpen; <code>1</code> is a good starting point.</td></tr>
+              <tr><td><code>--normalize</code></td><td>Stretch contrast across the full range.</td></tr>
+              <tr><td><code>--gamma &lt;value&gt;</code></td><td>Gamma correction.</td></tr>
+              <tr><td><code>--tint &lt;color&gt;</code></td><td>Tint while preserving luminance.</td></tr>
+              <tr><td><code>--trim &lt;threshold&gt;</code></td><td>Trim uniform borders, 1–100.</td></tr>
+              <tr><td><code>--extract &lt;WxH+X+Y&gt;</code></td><td>Crop a region, e.g. <code>800x600+100+50</code>.</td></tr>
+              <tr><td><code>--extend &lt;edges&gt;</code></td><td>Pad: <code>10</code>, <code>10,20</code>, or <code>10,20,30,40</code> (top,right,bottom,left).</td></tr>
+              <tr><td><code>--density &lt;dpi&gt;</code></td><td>Rasterization density for SVG input.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="encoding">
+        <h2>Encoding</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Option</th><th>Default</th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>-q, --quality &lt;value&gt;</code></td><td>per format</td><td>1–100, or <code>avif=50,webp=72</code>.</td></tr>
+              <tr><td><code>--effort &lt;value&gt;</code></td><td>avif 4, webp 4, png 10</td><td>CPU effort, or <code>avif=6,webp=4,png=10</code>.</td></tr>
+              <tr><td><code>--lossless</code></td><td>off</td><td>Lossless AVIF/WebP/PNG. JPEG is rejected.</td></tr>
+              <tr><td><code>--progressive</code> / <code>--no-progressive</code></td><td>on</td><td>Progressive or baseline JPEG.</td></tr>
+              <tr><td><code>--chroma-subsampling &lt;s&gt;</code></td><td><code>4:2:0</code></td><td><code>4:2:0</code>, <code>4:2:2</code>, <code>4:4:4</code>.</td></tr>
+              <tr><td><code>--alpha-quality &lt;n&gt;</code></td><td>100</td><td>WebP alpha quality.</td></tr>
+              <tr><td><code>--palette</code> / <code>--no-palette</code></td><td>auto</td><td>Force or disable PNG quantization.</td></tr>
+              <tr><td><code>--compression-level &lt;n&gt;</code></td><td>9</td><td>PNG zlib level 0–9.</td></tr>
+              <tr><td><code>--max-bytes &lt;size&gt;</code></td><td>none</td><td>Lower quality per variant until it fits, e.g. <code>150kb</code>.</td></tr>
+              <tr><td><code>--background &lt;color&gt;</code></td><td><code>#ffffff</code></td><td>Matte for transparent JPEGs, rotation, extend.</td></tr>
+              <tr><td><code>--keep-metadata</code></td><td>off</td><td>Keep EXIF/ICC instead of stripping.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Default quality is AVIF 55, WebP 78, JPEG 80, PNG 80. PNG quantizes to a palette below quality 100; use <code>--quality png=100</code> or <code>--lossless</code>. <code>--max-bytes</code> is per variant. If even quality 1 cannot fit, the file fails.</p>
+      </section>
+
+      <section id="workflow">
+        <h2>Workflow</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Option</th><th>Default</th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>--manifest &lt;file&gt;</code></td><td>none</td><td>JSON report with variants, dimensions, bytes, quality, frames, cache state, and <code>srcset</code>.</td></tr>
+              <tr><td><code>--picture &lt;file&gt;</code></td><td>none</td><td><code>&lt;picture&gt;</code> snippets for every input.</td></tr>
+              <tr><td><code>--report &lt;file&gt;</code></td><td>none</td><td>Self-contained before/after HTML report.</td></tr>
+              <tr><td><code>--public-path &lt;path&gt;</code></td><td><code>/</code></td><td>URL prefix for picture snippets.</td></tr>
+              <tr><td><code>--sizes &lt;value&gt;</code></td><td><code>100vw</code></td><td><code>sizes</code> attribute for snippets.</td></tr>
+              <tr><td><code>--lqip</code></td><td>off</td><td>Tiny WebP data URI placeholder + dominant color.</td></tr>
+              <tr><td><code>--cache</code> / <code>--no-cache</code></td><td>on</td><td>Reuse cached outputs; disable per run.</td></tr>
+              <tr><td><code>--cache-dir &lt;dir&gt;</code></td><td><code>node_modules/.cache/pixelpress</code></td><td>Cache location. One hashed file per output dir.</td></tr>
+              <tr><td><code>--prune</code></td><td>off</td><td>Delete cached outputs no longer produced. Requires cache.</td></tr>
+              <tr><td><code>--force</code></td><td>off</td><td>Re-encode even when cached.</td></tr>
+              <tr><td><code>--fail-fast</code></td><td>off</td><td>Stop after the first failed file.</td></tr>
+              <tr><td><code>--concurrency &lt;n&gt;</code></td><td>4</td><td>Files processed in parallel.</td></tr>
+              <tr><td><code>--dry-run</code></td><td>off</td><td>Plan without writing images or reports.</td></tr>
+              <tr><td><code>--stdout</code></td><td>off</td><td>Write one encoded image to stdout.</td></tr>
+              <tr><td><code>--json</code></td><td>off</td><td>Print the full report as JSON.</td></tr>
+              <tr><td><code>--quiet</code> / <code>--verbose</code></td><td>off</td><td>Summary only / list every variant.</td></tr>
+              <tr><td><code>--watch</code></td><td>off</td><td>Re-run when inputs change.</td></tr>
+              <tr><td><code>--init</code></td><td>off</td><td>Create a starter config and exit.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Stream mode accepts exactly one input and one format. Use <code>--width</code>/<code>--height</code>, not <code>--widths</code>. It cannot combine with <code>--out</code> (other than <code>-</code>), <code>--watch</code>, <code>--clean</code>, <code>--dry-run</code>, <code>--json</code>, <code>--manifest</code>, <code>--picture</code>, or <code>--report</code>. Logs go to stderr.</p>
+      </section>
+
+      <section id="cache">
+        <h2>Cache, prune, watch</h2>
+        <p>The CLI caches by default. Cache files live outside deployable output at <code>node_modules/.cache/pixelpress/cache-&lt;hash&gt;.json</code>. Fingerprints cover formats, widths, transforms, quality, metadata, and paths. The <code>PIXELPRESS_CACHE_DIR</code> environment variable sets the default.</p>
+        <div class="code">
+          <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#cache-cli">Copy</button></div>
+          <pre id="cache-cli">pixelpress photos -o dist -r                  # first run
+pixelpress photos -o dist -r                  # cached
+pixelpress photos -o dist -r --force          # re-encode
+pixelpress photos -o dist -r --prune          # clean retired outputs
+pixelpress photos -o dist -r --cache-dir .cache
+pixelpress photos -o dist -r --watch</pre>
+        </div>
+        <p><code>--prune</code> only deletes regular files recorded in the cache and inside <code>--out</code>. It never deletes inputs, failed-file outputs, or fail-fast leftovers, and it removes empty directories. A dry run does not delete. Cache writes are atomic and best-effort; a read-only cache directory never fails an image run.</p>
+        <div class="note">Cache invalidation uses mtime + size. Replacing a file while keeping both identical is treated as unchanged. Use <code>--force</code> when in doubt.</div>
+      </section>
+
+      <section id="config">
+        <h2>Config &amp; schema</h2>
+        <p>Create a starter config:</p>
+        <div class="code">
+          <div class="code-bar"><span>shell</span><button class="copy" type="button" data-copy="#init-code">Copy</button></div>
+          <pre id="init-code">pixelpress --init
+# writes pixelpress.config.json with the web preset, inputs, outDir,
+# cache, prune, and a $schema reference</pre>
+        </div>
+        <div class="code">
+          <div class="code-bar"><span>pixelpress.config.json</span><button class="copy" type="button" data-copy="#config-code">Copy</button></div>
+          <pre id="config-code">{
+  "$schema": "./node_modules/pixelpress/pixelpress.schema.json",
+  "preset": "web",
+  "inputs": ["src/images/**/*.{jpg,png}"],
+  "outDir": "public/images",
+  "recursive": true,
+  "cache": true,
+  "prune": true,
+  "manifest": "public/images.json",
+  "report": "public/report.html"
+}</pre>
+        </div>
+        <p>Auto-detected in the current directory. Use <code>--config other.json</code> for another path. <code>.mjs</code> and <code>.js</code> configs with a default export work too. CLI flags override config values. Paths resolve from the current working directory.</p>
+        <p>The schema is published at <code>node_modules/pixelpress/pixelpress.schema.json</code> for editor completion and validation.</p>
+      </section>
+
+      <section id="environment">
+        <h2>Environment &amp; exit codes</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>PIXELPRESS_CACHE_DIR</code></td><td>Default cache directory when <code>--cache-dir</code> is absent.</td></tr>
+              <tr><td><code>NO_COLOR</code></td><td>Disable ANSI color in terminal output.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The CLI exits <code>0</code> on success, <code>1</code> when any file or prune operation fails, or when no supported inputs are found. <code>--json</code> still prints the report on partial failure, so CI can archive it.</p>
+        <p>Next: <a href="api.html">Node API</a> · <a href="examples.html">Recipes</a> · <a href="https://github.com/aotr/pixelpress/blob/master/COMPARISON.md">Comparison</a></p>
+      </section>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="shell">
+    <div class="footer-grid">
+      <div>
+        <a class="footer-brand" href="./"><img src="assets/logo.svg" alt="" width="28" height="28">pixelpress</a>
+        <p>Bulk image compression for the web. Built on sharp. MIT licensed.</p>
+      </div>
+      <div class="footer-col">
+        <b>Docs</b>
+        <a href="cli.html">CLI reference</a>
+        <a href="api.html">Node API</a>
+        <a href="examples.html">Examples</a>
+        <a href="cli.html#config">Config + schema</a>
+      </div>
+      <div class="footer-col">
+        <b>Project</b>
+        <a href="https://github.com/aotr/pixelpress">GitHub</a>
+        <a href="https://www.npmjs.com/package/pixelpress">npm</a>
+        <a href="https://github.com/aotr/pixelpress/blob/master/PLAN.md">Roadmap</a>
+        <a href="https://github.com/aotr/pixelpress/blob/master/COMPARISON.md">Comparison</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span data-year>2026</span> Animesh Chakraborty · MIT</span>
+      <span>v0.5.0 · Node 22.5+</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

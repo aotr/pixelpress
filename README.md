@@ -1,8 +1,11 @@
 # pixelpress
 
 [![CI](https://github.com/aotr/pixelpress/actions/workflows/ci.yml/badge.svg)](https://github.com/aotr/pixelpress/actions/workflows/ci.yml)
+[![website](https://img.shields.io/badge/website-live-c9ff3d?labelColor=141310)](https://aotr.github.io/pixelpress/)
 [![npm](https://img.shields.io/npm/v/pixelpress.svg)](https://www.npmjs.com/package/pixelpress)
 [![license](https://img.shields.io/npm/l/pixelpress.svg)](LICENSE)
+
+**Docs and demos: [aotr.github.io/pixelpress](https://aotr.github.io/pixelpress/)**
 
 **Bulk image compression and transcoding.** Point it at a file, a folder, or a
 glob; get AVIF, WebP, JPEG, or PNG at responsive widths with sensible quality,
