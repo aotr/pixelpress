@@ -41,6 +41,9 @@ pixelpress hero.jpg -o dist -w 480,960,1920
 # A whole tree, recursively, keeping folder structure
 pixelpress public/images -o dist/images -r
 
+# Start from a preset and override one thing
+pixelpress photos -o dist -r --preset web --widths 640,1280
+
 # Every JPEG/PNG below assets/, but skip drafts
 pixelpress "assets/**/*.{jpg,png}" -o dist/assets \
   --include "products/**" --exclude "*-draft.*"
@@ -123,6 +126,7 @@ basename to avoid collisions. `--flat` drops the tree and uses basenames
 | --- | --- | --- |
 | `-o, --out <dir>` | `pixelpress-out` | Output directory. |
 | `-f, --formats <list>` | `avif,webp` | Any of `avif,webp,jpeg,png` (or `jpg`). |
+| `--preset <name>` | none | `web`, `thumb`, `social`, or `lossless`. |
 | `-w, --widths <list>` | source size | Responsive widths, e.g. `480,960,1920`. |
 | `--width <px>` | none | Single resize width (not with `--widths`). |
 | `--height <px>` | none | Single resize height (not with `--widths`). |
@@ -207,17 +211,52 @@ reported as failed instead of writing an oversized output. Lossless and
 | `--quiet` | off | Only print the summary. |
 | `--verbose` | off | Print every variant. |
 | `--watch` | off | Re-run when inputs change. |
+| `--init` | off | Create a starter `pixelpress.config.json`. |
 | `-h, --help`, `-v, --version` | | |
 
 Some flags take values beginning with `-` (for example a suffix of `-2x`); use
 the `--flag=value` form, e.g. `--suffix=-2x`.
 
+## Presets
+
+Presets are starting points; any explicit flag overrides them. For example,
+`--preset web --widths 640,1280` keeps the WebP/AVIF qualities but replaces the
+responsive widths.
+
+| Preset | Formats | Size | Defaults |
+| --- | --- | --- | --- |
+| `web` | AVIF, WebP | widths 480, 960, 1920 | AVIF 50, WebP 72 |
+| `thumb` | WebP | width 400 | WebP 72 |
+| `social` | JPEG, WebP | 1200 × 630 cover | JPEG 82, WebP 78 |
+| `lossless` | PNG, WebP | original size | lossless, PNG palette off |
+
+```bash
+pixelpress products -o dist -r --preset web
+pixelpress og.jpg -o social --preset social
+pixelpress icons -o dist -r --preset lossless
+```
+
+Presets work in the config file and API too.
+
 ## Config file
+
+Create a starter config with sensible defaults:
+
+```bash
+pixelpress --init
+```
+
+That writes `pixelpress.config.json` with a `$schema` reference, the `web`
+preset, an input glob, `outDir`, cache, and prune enabled. The schema is
+published at `node_modules/pixelpress/pixelpress.schema.json` for editor
+completion.
 
 Put defaults in `pixelpress.config.json` and run `pixelpress` with no inputs:
 
 ```json
 {
+  "$schema": "./node_modules/pixelpress/pixelpress.schema.json",
+  "preset": "web",
   "inputs": ["src/images/**/*.{jpg,png}"],
   "outDir": "public/images",
   "formats": ["avif", "webp"],
@@ -310,13 +349,14 @@ pre-hero-2x-960-a1b2c3d4.avif
 ```
 
 `--manifest` writes every input, variant, dimension, byte count, quality,
-animation frame count, and cache state. `--lqip` adds `placeholder` (a base64
-WebP data URI) and `dominantColor` to each file entry. Paths are relative to
-the current directory.
+animation frame count, cache state, and ready-to-use `srcset` strings per
+format. `--lqip` adds `placeholder` (a base64 WebP data URI) and
+`dominantColor` to each file entry. Paths are relative to the current
+directory.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "options": { "formats": ["avif", "webp"], "widths": [480], "...": "..." },
   "files": [
     {
@@ -348,7 +388,11 @@ the current directory.
           "animated": false,
           "pages": 1
         }
-      ]
+      ],
+      "srcset": {
+        "avif": "dist/images/hero-480.avif 480w",
+        "webp": "dist/images/hero-480.webp 480w"
+      }
     }
   ],
   "skipped": [],
@@ -464,8 +508,10 @@ for (const file of report.files) {
 
 Every path in the API result is absolute. The cache is **off by default** in the
 API; pass `cache: true` to enable it. `cacheDir` changes its location and
-`prune: true` removes stale outputs (it requires `cache: true`). `force`,
-`clean`, `failFast`, and all transforms accept the same names as the CLI.
+`prune: true` removes stale outputs (it requires `cache: true`). `preset`
+accepts `web`, `thumb`, `social`, or `lossless`; explicit options override the
+preset. `force`, `clean`, `failFast`, and all transforms accept the same names
+as the CLI.
 
 Single image, buffer in and buffer out:
 
@@ -515,6 +561,8 @@ is intentionally not triggered by tags until trusted publishing is configured.
   final file.
 - **Stale outputs can be pruned** with `--prune`, using the cache's output
   index. Failed files and inputs outside the current run are handled safely.
+- **Failed multi-format runs roll back** newly created outputs for that file;
+  files that already existed before the run keep their new version.
 - **Per-file failures do not stop the run** unless `--fail-fast`; the CLI exits
   `1` if anything failed.
 - **Metadata is stripped by default** (including GPS); pass `--keep-metadata`

@@ -14,6 +14,7 @@ export interface EffortMap {
 }
 
 export type FitMode = 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
+export type PresetName = 'web' | 'thumb' | 'social' | 'lossless';
 
 export interface ExtractOptions {
   width: number;
@@ -35,6 +36,8 @@ export interface OptimizeOptions {
   outDir?: string;
   /** Target formats. Default: ['avif', 'webp'] */
   formats?: OutputFormat[] | string;
+  /** Start from a named preset; explicit options override it. */
+  preset?: PresetName;
   /** Responsive set. Never upscales unless enlarge is true. */
   widths?: number[] | string;
   /** Single resize width (do not combine with widths). */
@@ -189,6 +192,7 @@ export interface PruneError {
 
 export interface ResolvedOptions {
   outDir: string;
+  preset: PresetName | null;
   formats: OutputFormat[];
   widths: number[];
   quality: Required<QualityMap>;

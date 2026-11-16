@@ -1,7 +1,7 @@
 # How pixelpress compares
 
 Versions checked: sharp-cli 6.1, imagemin-cli 8.0, Squoosh CLI 0.7,
-vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.4 (October 2026).
+vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.5 (November 2026).
 
 `✅` first-class, `◐` possible with extra setup, `—` not a feature.
 
@@ -12,6 +12,8 @@ vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.4 (October 2026).
 | Recursive directory input | ✅ | ✅ (glob) | ✅ (glob) | — | ✅ | ✅ |
 | Include / exclude filters | ✅ | ◐ (globs) | ◐ (globs) | — | ◐ | ◐ |
 | Config file | ✅ | — | — | — | ✅ (Vite) | ✅ (11ty) |
+| Config scaffolding / schema | ✅ | — | — | — | — | — |
+| Preset workflows | ✅ | — | — | ◐ (codecs) | — | — |
 | Watch mode | ✅ | — | — | — | ✅ (Vite) | ◐ (11ty dev) |
 | Incremental cache | ✅ | — | — | — | ✅ (bundler) | ◐ |
 | Per-format quality | ✅ | ◐ (one value) | ✅ (plugins) | ✅ | ✅ | ✅ |

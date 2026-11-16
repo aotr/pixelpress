@@ -107,7 +107,18 @@ stdin/stdout piping.
 - **0.4.2**: cache writes are best-effort; a read-only or full cache directory
   never fails an otherwise successful image run.
 
-## 0.5
+## 0.5 — shipped
+
+- **Presets**: `--preset web|thumb|social|lossless`, with explicit flags
+  overriding preset defaults.
+- **Onboarding**: `pixelpress --init` writes a starter config, and
+  `pixelpress.schema.json` gives editors completion and validation.
+- **Manifest `srcset`**: every file entry now includes ready-to-use `srcset`
+  strings per format.
+- **Partial-run recovery**: newly created outputs are rolled back when a
+  multi-format file fails; previously existing outputs keep their new version.
+
+## 0.6
 
 - **Animated AVIF** when sharp/libvips exposes reliable frame output.
 - **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
@@ -117,11 +128,6 @@ stdin/stdout piping.
   watermarking).
 - **Better watch fallback**: chokidar-style recursive watching on platforms
   without recursive `fs.watch`, plus config-file reloads.
-- **Partial-run recovery**: clean up already-written variants when one format
-  in a multi-format run fails.
-- **Onboarding**: `pixelpress --init` and a JSON Schema for
-  `pixelpress.config.json`.
-- **Presets**: `--preset web|thumb|social|lossless` over the option surface.
 
 ## Non-goals
 
@@ -132,10 +138,11 @@ stdin/stdout piping.
 
 ## Quality bar
 
-- 25 `node:test` cases cover API, globs, filters, quality, transforms, max
+- 28 `node:test` cases cover API, globs, filters, quality, transforms, max
   bytes, cache invalidation and migration, pruning, atomic temp cleanup, clean
-  safety, LQIP, config, srcset, animated frames, reports, stdout, collisions,
-  alpha flattening, EXIF orientation, and CLI behavior.
+  safety, LQIP, config, srcset, presets, init, animated frames, reports,
+  stdout, partial-run rollback, collisions, alpha flattening, EXIF orientation,
+  and CLI behavior.
 - Every option appears in `--help` and the README.
 - Dry runs touch nothing. Clean refuses unsafe paths. Output never overwrites
   an input. Prune only deletes cached outputs inside the output directory.

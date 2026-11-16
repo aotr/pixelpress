@@ -31,6 +31,7 @@ Input
 Output
   -o, --out <dir>              output directory              (default: pixelpress-out)
   -f, --formats <list>         avif,webp,jpeg,png            (default: avif,webp)
+      --preset <name>          web, thumb, social, lossless
   -w, --widths <list>          responsive widths, e.g. 480,960,1920
       --width <px>             single resize width
       --height <px>            single resize height
@@ -95,6 +96,7 @@ Workflow
       --quiet                  only print the summary
       --verbose                print every variant
       --watch                  re-run when inputs change
+      --init                   create a starter pixelpress.config.json
   -h, --help
   -v, --version
 
@@ -131,6 +133,10 @@ async function main() {
   }
   if (values.version) {
     process.stdout.write(`${pkg.version}\n`);
+    return;
+  }
+  if (values.init) {
+    await initConfig(values.config);
     return;
   }
 
@@ -193,6 +199,7 @@ function parseCli(argv) {
         'out-dir': { type: 'string' },
         formats: { type: 'string', short: 'f' },
         format: { type: 'string' },
+        preset: { type: 'string' },
         quality: { type: 'string', short: 'q' },
         effort: { type: 'string' },
         widths: { type: 'string', short: 'w' },
@@ -261,6 +268,7 @@ function parseCli(argv) {
         quiet: { type: 'boolean' },
         verbose: { type: 'boolean' },
         watch: { type: 'boolean' },
+        init: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
       },
@@ -270,8 +278,31 @@ function parseCli(argv) {
   }
 }
 
-async function resolveConfig(values) {
-  let file = null;
+async function initConfig(configPath) {
+  const destination = path.resolve(configPath ?? 'pixelpress.config.json');
+  try {
+    await fs.access(destination);
+    throw new Error(`${destination} already exists`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  const config = {
+    $schema: './node_modules/pixelpress/pixelpress.schema.json',
+    preset: 'web',
+    inputs: ['src/images/**/*.{jpg,jpeg,png}'],
+    outDir: 'public/images',
+    recursive: true,
+    cache: true,
+    prune: true,
+  };
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await writeFileAtomic(destination, `${JSON.stringify(config, null, 2)}\n`);
+  process.stdout.write(`pixelpress: created ${show(destination)}\n`);
+  process.stdout.write('Edit inputs/outDir, then run: pixelpress\n');
+}
+
+async function resolveConfig(values) {  let file = null;
   if (values.config) {
     file = path.resolve(values.config);
   } else {
@@ -318,6 +349,7 @@ function buildOptions(values, config) {
   }
   if (values.formats != null) options.formats = values.formats;
   if (values.format != null) options.formats = values.format;
+  if (values.preset != null) options.preset = values.preset;
   if (values.quality != null) options.quality = parseQuality(values.quality);
   if (values.effort != null) options.effort = parseEffort(values.effort);
   if (values.widths != null) {
@@ -681,7 +713,7 @@ function staticRoot(pattern) {
 
 function publicReport(result) {
   return {
-    version: 3,
+    version: 4,
     generatedAt: new Date().toISOString(),
     options: result.options,
     files: result.files.map((file) => ({
@@ -702,6 +734,7 @@ function publicReport(result) {
         animated: output.animated,
         pages: output.pages,
       })),
+      srcset: buildSrcset(file, result.options),
     })),
     skipped: result.skipped.map((item) => ({ input: rel(item.input), reason: item.reason })),
     failed: result.failed.map((item) => ({ input: rel(item.input), error: item.error })),
@@ -709,6 +742,22 @@ function publicReport(result) {
     pruneErrors: result.pruneErrors.map((item) => ({ path: rel(item.path), error: item.error })),
     totals: result.totals,
   };
+}
+
+function buildSrcset(file, options) {
+  const srcset = {};
+  for (const format of ['avif', 'webp', 'jpeg', 'png']) {
+    const outputs = file.outputs
+      .filter((output) => output.format === format)
+      .sort((a, b) => (a.width ?? 0) - (b.width ?? 0));
+    if (outputs.length === 0) continue;
+    srcset[format] = outputs
+      .map((output) => (options.widths.length > 0 && output.width
+        ? `${rel(output.path)} ${output.width}w`
+        : rel(output.path)))
+      .join(', ');
+  }
+  return srcset;
 }
 
 function buildPicture(file, options, flags) {

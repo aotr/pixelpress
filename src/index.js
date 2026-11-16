@@ -32,6 +32,35 @@ const FIT_MODES = ['cover', 'contain', 'fill', 'inside', 'outside'];
 const CHROMA_SUBSAMPLING = ['4:2:0', '4:2:2', '4:4:4'];
 const IGNORED_DIRS = new Set(['node_modules']);
 
+const PRESETS = {
+  web: {
+    formats: ['avif', 'webp'],
+    widths: [480, 960, 1920],
+    quality: { avif: 50, webp: 72 },
+    effort: { avif: 5, webp: 4 },
+  },
+  thumb: {
+    formats: ['webp'],
+    width: 400,
+    quality: { webp: 72 },
+    effort: { webp: 4 },
+  },
+  social: {
+    formats: ['jpeg', 'webp'],
+    width: 1200,
+    height: 630,
+    fit: 'cover',
+    position: 'center',
+    quality: { jpeg: 82, webp: 78 },
+  },
+  lossless: {
+    formats: ['png', 'webp'],
+    lossless: true,
+    palette: false,
+    quality: { png: 100, webp: 100 },
+  },
+};
+
 /**
  * Compress and transcode every image under the given files, directories, or globs.
  *
@@ -209,9 +238,10 @@ async function runSafely(spec, processOne) {
 }
 
 function normalizeOptions(options) {
-  const image = normalizeImageOptions(options);
-  const formats = normalizeFormats(options.formats ?? ['avif', 'webp']);
-  const widths = normalizeWidths(options.widths);
+  const resolved = applyPreset(options);
+  const image = normalizeImageOptions(resolved);
+  const formats = normalizeFormats(resolved.formats ?? ['avif', 'webp']);
+  const widths = normalizeWidths(resolved.widths);
 
   if (widths.length > 0 && (image.width != null || image.height != null)) {
     throw new TypeError('use either widths (responsive set) or width/height (single resize), not both');
@@ -223,39 +253,77 @@ function normalizeOptions(options) {
     throw new TypeError('lossless and maxBytes cannot be combined');
   }
 
-  const prefix = normalizeAffix(options.prefix, 'prefix');
-  const suffix = normalizeAffix(options.suffix, 'suffix');
-  const cache = Boolean(options.cache);
-  const prune = Boolean(options.prune);
+  const prefix = normalizeAffix(resolved.prefix, 'prefix');
+  const suffix = normalizeAffix(resolved.suffix, 'suffix');
+  const cache = Boolean(resolved.cache);
+  const prune = Boolean(resolved.prune);
   if (prune && !cache) throw new TypeError('prune requires cache: true');
   const cacheDir = path.resolve(
-    options.cacheDir ?? process.env.PIXELPRESS_CACHE_DIR ?? path.join('node_modules', '.cache', 'pixelpress'),
+    resolved.cacheDir ?? process.env.PIXELPRESS_CACHE_DIR ?? path.join('node_modules', '.cache', 'pixelpress'),
   );
 
   return {
     ...image,
+    preset: resolved.preset ?? null,
     formats,
     widths,
-    outDir: path.resolve(options.outDir ?? 'pixelpress-out'),
+    outDir: path.resolve(resolved.outDir ?? 'pixelpress-out'),
     prefix,
     suffix,
-    hash: Boolean(options.hash),
-    recursive: Boolean(options.recursive),
-    flat: Boolean(options.flat),
-    dryRun: Boolean(options.dryRun),
+    hash: Boolean(resolved.hash),
+    recursive: Boolean(resolved.recursive),
+    flat: Boolean(resolved.flat),
+    dryRun: Boolean(resolved.dryRun),
     cache,
     cacheDir,
     prune,
-    force: Boolean(options.force),
-    clean: Boolean(options.clean),
-    failFast: Boolean(options.failFast),
-    followSymlinks: Boolean(options.followSymlinks),
-    preserveDates: Boolean(options.preserveDates),
-    lqip: Boolean(options.lqip),
-    include: normalizePatterns(options.include),
-    exclude: normalizePatterns(options.exclude),
-    concurrency: options.concurrency == null ? 4 : toPositiveInt(options.concurrency, 'concurrency'),
+    force: Boolean(resolved.force),
+    clean: Boolean(resolved.clean),
+    failFast: Boolean(resolved.failFast),
+    followSymlinks: Boolean(resolved.followSymlinks),
+    preserveDates: Boolean(resolved.preserveDates),
+    lqip: Boolean(resolved.lqip),
+    include: normalizePatterns(resolved.include),
+    exclude: normalizePatterns(resolved.exclude),
+    concurrency: resolved.concurrency == null ? 4 : toPositiveInt(resolved.concurrency, 'concurrency'),
   };
+}
+
+function applyPreset(options) {
+  if (options.preset == null) return options;
+  const name = String(options.preset).toLowerCase();
+  const preset = PRESETS[name];
+  if (!preset) {
+    throw new TypeError(`unknown preset "${options.preset}" (choose ${Object.keys(PRESETS).join(', ')})`);
+  }
+
+  const overrides = {};
+  for (const [key, value] of Object.entries(options)) {
+    if (key !== 'preset' && value !== undefined) overrides[key] = value;
+  }
+  const merged = { ...preset, ...overrides };
+
+  if (preset.quality && isPlainObject(overrides.quality)) {
+    merged.quality = { ...preset.quality, ...overrides.quality };
+  }
+  if (preset.effort && isPlainObject(overrides.effort)) {
+    merged.effort = { ...preset.effort, ...overrides.effort };
+  }
+  if (overrides.widths != null) {
+    delete merged.width;
+    delete merged.height;
+  }
+  if (overrides.width != null || overrides.height != null) {
+    delete merged.widths;
+    if (overrides.width != null && overrides.height == null) delete merged.height;
+    if (overrides.height != null && overrides.width == null) delete merged.width;
+  }
+
+  return { ...merged, preset: name };
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function normalizeImageOptions(options) {
@@ -793,6 +861,29 @@ async function removeEmptyDirs(directories, stopAt) {
   }
 }
 
+async function pathExists(target) {
+  try {
+    await fs.lstat(target);
+    return true;
+  } catch (error) {
+    return error.code !== 'ENOENT';
+  }
+}
+
+async function rollbackOutputs(created, outDir) {
+  const directories = new Set();
+  for (const item of created) {
+    if (item.existed) continue;
+    try {
+      await fs.rm(item.path, { force: true });
+      directories.add(path.dirname(item.path));
+    } catch {
+      // Best effort: the run already failed.
+    }
+  }
+  await removeEmptyDirs(directories, outDir);
+}
+
 async function processSource(spec, cfg, claimed, cache) {
   const stat = await fs.stat(spec.file);
   const cached = await fromCache(spec, cfg, cache, claimed, stat);
@@ -812,67 +903,74 @@ async function processSource(spec, cfg, claimed, cache) {
   const animatedInput = (meta.pages ?? 1) > 1;
   const variants = selectVariants(sourceWidth, cfg);
   const outputs = [];
+  const created = [];
 
-  for (const variant of variants) {
-    for (const format of cfg.formats) {
-      const keepFrames = animatedInput && ANIMATED_OUTPUT_FORMATS.has(format);
-      const needsBuffer = cfg.hash || cfg.maxBytes != null;
-      let encoded = null;
+  try {
+    for (const variant of variants) {
+      for (const format of cfg.formats) {
+        const keepFrames = animatedInput && ANIMATED_OUTPUT_FORMATS.has(format);
+        const needsBuffer = cfg.hash || cfg.maxBytes != null;
+        let encoded = null;
 
-      if (needsBuffer) {
-        encoded = await encodeToBuffer(spec.file, cfg, format, variant.width, variant.height, keepFrames);
-      }
-
-      const digest = cfg.hash ? sha256(encoded.data) : null;
-      const outPath = outputPath(spec, cfg, format, variant.width, digest);
-      if (outPath === spec.file) {
-        throw new Error('output would overwrite the input file; choose a different --out');
-      }
-      claim(claimed, outPath, spec.file);
-
-      let info = encoded?.info ?? null;
-      const quality = encoded?.quality ?? cfg.quality[format];
-
-      if (!cfg.dryRun) {
-        await fs.mkdir(path.dirname(outPath), { recursive: true });
-        if (encoded) {
-          await writeAtomic(outPath, (temporary) => fs.writeFile(temporary, encoded.data));
-        } else {
-          info = await writeAtomic(outPath, (temporary) => buildPipeline(spec.file, cfg, format, {
-            width: variant.width,
-            height: variant.height,
-            quality,
-            animated: keepFrames,
-          }).toFile(temporary));
+        if (needsBuffer) {
+          encoded = await encodeToBuffer(spec.file, cfg, format, variant.width, variant.height, keepFrames);
         }
-        if (cfg.preserveDates) {
-          await fs.utimes(outPath, stat.atime, stat.mtime);
+
+        const digest = cfg.hash ? sha256(encoded.data) : null;
+        const outPath = outputPath(spec, cfg, format, variant.width, digest);
+        if (outPath === spec.file) {
+          throw new Error('output would overwrite the input file; choose a different --out');
         }
-      }
+        claim(claimed, outPath, spec.file);
 
-      let width = info?.width ?? variant.width ?? null;
-      let height = info?.height ?? variant.height ?? null;
-      let pages = keepFrames ? (meta.pages ?? 1) : 1;
-      if (keepFrames && info) {
-        const outputMeta = encoded
-          ? await sharp(encoded.data, { animated: true }).metadata()
-          : await sharp(outPath, { animated: true }).metadata();
-        width = outputMeta.width ?? width;
-        height = outputMeta.pageHeight ?? height;
-        pages = outputMeta.pages ?? (meta.pages ?? 1);
-      }
+        let info = encoded?.info ?? null;
+        const quality = encoded?.quality ?? cfg.quality[format];
 
-      outputs.push({
-        format,
-        path: outPath,
-        width,
-        height,
-        bytes: info?.size ?? null,
-        quality,
-        animated: keepFrames,
-        pages,
-      });
+        if (!cfg.dryRun) {
+          await fs.mkdir(path.dirname(outPath), { recursive: true });
+          created.push({ path: outPath, existed: await pathExists(outPath) });
+          if (encoded) {
+            await writeAtomic(outPath, (temporary) => fs.writeFile(temporary, encoded.data));
+          } else {
+            info = await writeAtomic(outPath, (temporary) => buildPipeline(spec.file, cfg, format, {
+              width: variant.width,
+              height: variant.height,
+              quality,
+              animated: keepFrames,
+            }).toFile(temporary));
+          }
+          if (cfg.preserveDates) {
+            await fs.utimes(outPath, stat.atime, stat.mtime);
+          }
+        }
+
+        let width = info?.width ?? variant.width ?? null;
+        let height = info?.height ?? variant.height ?? null;
+        let pages = keepFrames ? (meta.pages ?? 1) : 1;
+        if (keepFrames && info) {
+          const outputMeta = encoded
+            ? await sharp(encoded.data, { animated: true }).metadata()
+            : await sharp(outPath, { animated: true }).metadata();
+          width = outputMeta.width ?? width;
+          height = outputMeta.pageHeight ?? height;
+          pages = outputMeta.pages ?? (meta.pages ?? 1);
+        }
+
+        outputs.push({
+          format,
+          path: outPath,
+          width,
+          height,
+          bytes: info?.size ?? null,
+          quality,
+          animated: keepFrames,
+          pages,
+        });
+      }
     }
+  } catch (error) {
+    await rollbackOutputs(created, cfg.outDir);
+    throw error;
   }
 
   const file = {

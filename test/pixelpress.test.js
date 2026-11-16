@@ -249,11 +249,13 @@ test('cli writes files, a manifest, and a JSON report', async (t) => {
   }
 
   const saved = JSON.parse(await fs.readFile(manifest, 'utf8'));
+  assert.equal(saved.version, 4);
   assert.equal(saved.files.length, 1);
   assert.deepEqual(
     saved.files[0].outputs.map((output) => output.width),
     [100, 200],
   );
+  assert.match(saved.files[0].srcset.webp, /photo-100\.webp 100w/);
   assert.equal(saved.totals.files, 1);
 });
 
@@ -730,5 +732,92 @@ test('prune removes stale variants and deleted sources, but keeps failed outputs
   await assert.rejects(
     optimize([source], { outDir: out, formats: ['webp'], cache: false, prune: true }),
     /prune requires cache/,
+  );
+});
+
+test('failed multi-format runs roll back only newly created outputs', async (t) => {
+  const dir = await tempDir(t);
+  const source = path.join(dir, 'src', 'a.jpg');
+  await makeJpeg(source, 160, 120);
+
+  const firstOut = path.join(dir, 'first');
+  await fs.mkdir(path.join(firstOut, 'a.jpg'), { recursive: true });
+  const first = await optimize([source], {
+    outDir: firstOut,
+    formats: ['webp', 'jpeg'],
+    cache: false,
+  });
+  assert.equal(first.failed.length, 1);
+  await assert.rejects(fs.access(path.join(firstOut, 'a.webp')));
+  assert.equal((await fs.stat(path.join(firstOut, 'a.jpg'))).isDirectory(), true);
+
+  const secondOut = path.join(dir, 'second');
+  await fs.mkdir(path.join(secondOut, 'a.jpg'), { recursive: true });
+  await fs.writeFile(path.join(secondOut, 'a.webp'), 'previous output');
+  const second = await optimize([source], {
+    outDir: secondOut,
+    formats: ['webp', 'jpeg'],
+    cache: false,
+  });
+  assert.equal(second.failed.length, 1);
+  await fs.access(path.join(secondOut, 'a.webp'));
+  assert.equal((await fs.stat(path.join(secondOut, 'a.jpg'))).isDirectory(), true);
+
+  const leftovers = await fs.readdir(dir, { recursive: true });
+  assert.deepEqual(leftovers.filter((entry) => entry.endsWith('.tmp')), []);
+});
+
+test('presets set defaults and explicit options override them', async (t) => {
+  const dir = await tempDir(t);
+  const input = path.join(dir, 'large.jpg');
+  await makeJpeg(input, 2400, 1600);
+
+  const web = await optimize([input], { outDir: path.join(dir, 'web'), preset: 'web', cache: false });
+  assert.equal(web.options.preset, 'web');
+  assert.deepEqual(web.options.widths, [480, 960, 1920]);
+  assert.equal(web.files[0].outputs.length, 6);
+  assert.deepEqual([...new Set(web.files[0].outputs.map((output) => output.width))], [480, 960, 1920]);
+
+  const overridden = await optimize([input], {
+    outDir: path.join(dir, 'overridden'),
+    preset: 'web',
+    formats: ['webp'],
+    widths: [640],
+    cache: false,
+  });
+  assert.equal(overridden.files[0].outputs.length, 1);
+  assert.equal(overridden.files[0].outputs[0].width, 640);
+
+  const thumb = await optimize([input], {
+    outDir: path.join(dir, 'thumb'),
+    preset: 'thumb',
+    width: 300,
+    cache: false,
+  });
+  assert.equal(thumb.files[0].outputs[0].width, 300);
+
+  await assert.rejects(
+    optimize([input], { outDir: path.join(dir, 'bad'), preset: 'nope' }),
+    /unknown preset/,
+  );
+});
+
+test('cli init writes a config and refuses to overwrite it', async (t) => {
+  const dir = await tempDir(t);
+  const cli = path.join(root, 'src', 'cli.js');
+
+  const { stdout } = await exec(process.execPath, [cli, '--init'], { cwd: dir });
+  assert.match(stdout, /created/);
+  const config = JSON.parse(await fs.readFile(path.join(dir, 'pixelpress.config.json'), 'utf8'));
+  assert.equal(config.preset, 'web');
+  assert.match(config.$schema, /pixelpress\.schema\.json$/);
+
+  await assert.rejects(
+    exec(process.execPath, [cli, '--init'], { cwd: dir }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /already exists/);
+      return true;
+    },
   );
 });

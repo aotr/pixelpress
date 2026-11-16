@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/aotr/pixelpress/master/pixelpress.schema.json",
+  "title": "pixelpress configuration",
+  "description": "Configuration file for pixelpress. CLI flags override these values.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "inputs": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "outDir": { "type": "string" },
+    "out": { "type": "string", "description": "Alias for outDir" },
+    "formats": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "enum": ["avif", "webp", "jpeg", "jpg", "png"] } }
+      ]
+    },
+    "format": { "type": "string", "description": "Alias for formats" },
+    "preset": { "enum": ["web", "thumb", "social", "lossless"] },
+    "widths": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "integer", "minimum": 1 } }
+      ]
+    },
+    "width": { "type": "integer", "minimum": 1 },
+    "height": { "type": "integer", "minimum": 1 },
+    "fit": { "enum": ["cover", "contain", "fill", "inside", "outside"] },
+    "position": { "type": "string" },
+    "enlarge": { "type": "boolean" },
+    "prefix": { "type": "string" },
+    "suffix": { "type": "string" },
+    "hash": { "type": "boolean" },
+    "flat": { "type": "boolean" },
+    "clean": { "type": "boolean" },
+    "preserveDates": { "type": "boolean" },
+    "recursive": { "type": "boolean" },
+    "include": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "exclude": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "followSymlinks": { "type": "boolean" },
+    "quality": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1, "maximum": 100 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "avif": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "webp": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "jpeg": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "jpg": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "png": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        }
+      ]
+    },
+    "effort": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "avif": { "type": "integer", "minimum": 0, "maximum": 9 },
+            "webp": { "type": "integer", "minimum": 0, "maximum": 6 },
+            "png": { "type": "integer", "minimum": 1, "maximum": 10 }
+          }
+        }
+      ]
+    },
+    "lossless": { "type": "boolean" },
+    "progressive": { "type": "boolean" },
+    "chromaSubsampling": { "enum": ["4:2:0", "4:2:2", "4:4:4"] },
+    "alphaQuality": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "palette": { "type": "boolean" },
+    "compressionLevel": { "type": "integer", "minimum": 0, "maximum": 9 },
+    "maxBytes": { "type": "integer", "minimum": 1 },
+    "background": { "type": "string" },
+    "keepMetadata": { "type": "boolean" },
+    "rotate": { "type": "number" },
+    "autoOrient": { "type": "boolean" },
+    "flip": { "type": "boolean" },
+    "flop": { "type": "boolean" },
+    "grayscale": { "type": "boolean" },
+    "blur": { "type": "number", "exclusiveMinimum": 0 },
+    "sharpen": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "number", "exclusiveMinimum": 0 }
+      ]
+    },
+    "normalize": { "type": "boolean" },
+    "gamma": { "type": "number", "exclusiveMinimum": 0 },
+    "tint": { "type": "string" },
+    "trim": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "integer", "minimum": 1, "maximum": 100 }
+      ]
+    },
+    "extract": {
+      "oneOf": [
+        { "type": "string", "pattern": "^\\d+x\\d+\\+\\d+\\+\\d+$" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 },
+            "left": { "type": "integer", "minimum": 0 },
+            "top": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "extend": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "string" },
+        { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 1, "maxItems": 4 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "all": { "type": "integer", "minimum": 0 },
+            "top": { "type": "integer", "minimum": 0 },
+            "right": { "type": "integer", "minimum": 0 },
+            "bottom": { "type": "integer", "minimum": 0 },
+            "left": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "density": { "type": "integer", "minimum": 1 },
+    "lqip": { "type": "boolean" },
+    "cache": { "type": "boolean" },
+    "cacheDir": { "type": "string" },
+    "prune": { "type": "boolean" },
+    "force": { "type": "boolean" },
+    "failFast": { "type": "boolean" },
+    "concurrency": { "type": "integer", "minimum": 1 },
+    "dryRun": { "type": "boolean" },
+    "manifest": { "type": "string" },
+    "picture": { "type": "string" },
+    "report": { "type": "string" },
+    "publicPath": { "type": "string" },
+    "sizes": { "type": "string" }
+  }
+}
