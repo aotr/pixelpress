@@ -102,6 +102,8 @@ stdin/stdout piping.
 - **CI**: GitHub Actions tests Node 22/24 on Ubuntu and macOS.
 - **Trusted publishing**: a manual `Publish` workflow uses npm OIDC and
   `--provenance`; configure the trusted publisher on npmjs.com first.
+- **0.4.1**: failed runs keep stale cache entries so a later `--prune` can
+  still remove their old outputs.
 
 ## 0.5
 

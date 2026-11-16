@@ -79,13 +79,21 @@ export async function optimize(inputs, options = {}) {
 
   const handled = new Set();
   const skippedInputs = new Set();
+  const preserveInputs = new Set();
   for (const result of settled) {
     if (result.file) handled.add(result.file.input);
-    if (result.failed) handled.add(result.failed.input);
+    if (result.failed) {
+      handled.add(result.failed.input);
+      preserveInputs.add(result.failed.input);
+    }
     if (result.skipped) {
       handled.add(result.skipped.input);
       skippedInputs.add(result.skipped.input);
+      preserveInputs.add(result.skipped.input);
     }
+  }
+  for (const spec of specs) {
+    if (!handled.has(spec.file)) preserveInputs.add(spec.file);
   }
 
   const pruned = cache && cfg.prune && !cfg.dryRun
@@ -99,6 +107,10 @@ export async function optimize(inputs, options = {}) {
 
   if (cache) {
     const entries = {};
+    for (const input of preserveInputs) {
+      const previous = cache.previousFiles[input];
+      if (previous) entries[input] = { ...previous, stale: true };
+    }
     for (const file of files) {
       const meta = file.cacheMeta;
       entries[file.input] = {
@@ -888,6 +900,7 @@ async function fromCache(spec, cfg, cache, claimed, stat) {
   if (!cache || cfg.force) return null;
   const entry = cache.files[spec.file];
   if (!entry) return null;
+  if (entry.stale) return null;
   if (entry.mtimeMs !== stat.mtimeMs || entry.size !== stat.size) return null;
   if (!Array.isArray(entry.outputs) || entry.outputs.length === 0) return null;
 

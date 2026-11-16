@@ -714,6 +714,16 @@ test('prune removes stale variants and deleted sources, but keeps failed outputs
   assert.equal(third.totals.pruned, 0);
   await fs.access(path.join(out, 'a-100.webp'));
 
+  await fs.rm(a);
+  const fourth = await optimize([source], {
+    ...common,
+    formats: ['webp'],
+    widths: [100],
+  });
+  assert.equal(fourth.files.length, 0);
+  assert.equal(fourth.totals.pruned, 1);
+  await assert.rejects(fs.access(path.join(out, 'a-100.webp')));
+
   const entries = await fs.readdir(dir, { recursive: true });
   assert.deepEqual(entries.filter((entry) => entry.endsWith('.tmp')), []);
 
