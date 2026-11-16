@@ -87,7 +87,23 @@ stdin/stdout piping.
   with all transforms and size budgets intact.
 - Cache version bumped for the new output shape.
 
-## 0.4
+## 0.4 — shipped
+
+- **Prune**: `--prune` deletes outputs recorded in the cache that are no longer
+  produced. It removes empty directories, never deletes inputs, and keeps
+  outputs for failed files and fail-fast leftovers.
+- **Cache relocation**: cache files now live in
+  `node_modules/.cache/pixelpress/cache-<outDir-hash>.json`, outside deployable
+  output. `--cache-dir` and `PIXELPRESS_CACHE_DIR` override the location.
+  0.3 caches inside `outDir` are migrated once and removed.
+- **Atomic writes**: images, manifests, picture files, reports, and cache files
+  are written to a temp file and renamed, so interruption cannot leave a
+  partial final file.
+- **CI**: GitHub Actions tests Node 22/24 on Ubuntu and macOS.
+- **Trusted publishing**: a manual `Publish` workflow uses npm OIDC and
+  `--provenance`; configure the trusted publisher on npmjs.com first.
+
+## 0.5
 
 - **Animated AVIF** when sharp/libvips exposes reliable frame output.
 - **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
@@ -97,8 +113,11 @@ stdin/stdout piping.
   watermarking).
 - **Better watch fallback**: chokidar-style recursive watching on platforms
   without recursive `fs.watch`, plus config-file reloads.
-- **Partial-run recovery**: clean up half-written variants when one format in a
-  multi-format run fails.
+- **Partial-run recovery**: clean up already-written variants when one format
+  in a multi-format run fails.
+- **Onboarding**: `pixelpress --init` and a JSON Schema for
+  `pixelpress.config.json`.
+- **Presets**: `--preset web|thumb|social|lossless` over the option surface.
 
 ## Non-goals
 
@@ -109,10 +128,10 @@ stdin/stdout piping.
 
 ## Quality bar
 
-- 24 `node:test` cases cover API, globs, filters, quality, transforms, max
-  bytes, cache invalidation, clean safety, LQIP, config, srcset, animated
-  frames, reports, stdout, collisions, alpha flattening, EXIF orientation, and
-  CLI behavior.
+- 25 `node:test` cases cover API, globs, filters, quality, transforms, max
+  bytes, cache invalidation and migration, pruning, atomic temp cleanup, clean
+  safety, LQIP, config, srcset, animated frames, reports, stdout, collisions,
+  alpha flattening, EXIF orientation, and CLI behavior.
 - Every option appears in `--help` and the README.
 - Dry runs touch nothing. Clean refuses unsafe paths. Output never overwrites
-  an input.
+  an input. Prune only deletes cached outputs inside the output directory.

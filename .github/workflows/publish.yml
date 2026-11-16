@@ -1,0 +1,28 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+  # Once npm trusted publishing is configured, enable tag releases:
+  # push:
+  #   tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # Configure a trusted publisher on npmjs.com:
+      # package settings -> Trusted publishing -> GitHub Actions
+      # repository aotr/pixelpress, workflow publish.yml
+      - run: npm publish --access public --provenance

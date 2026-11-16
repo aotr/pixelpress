@@ -115,6 +115,10 @@ export interface OptimizeOptions {
   lqip?: boolean;
   /** Reuse the output cache. API default: false; CLI default: true. */
   cache?: boolean;
+  /** Cache directory. Default: node_modules/.cache/pixelpress */
+  cacheDir?: string;
+  /** Delete outputs that are no longer produced. Requires cache: true. */
+  prune?: boolean;
   /** Re-encode even when cached. Default: false */
   force?: boolean;
   /** Stop after the first failure. Default: false */
@@ -167,6 +171,8 @@ export interface Totals {
   files: number;
   outputs: number;
   cached: number;
+  pruned: number;
+  pruneErrors: number;
   sourceBytes: number;
   outputBytes: number | null;
   savedBytes: number | null;
@@ -174,6 +180,11 @@ export interface Totals {
   skipped: number;
   failed: number;
   durationMs: number;
+}
+
+export interface PruneError {
+  path: string;
+  error: string;
 }
 
 export interface ResolvedOptions {
@@ -192,6 +203,8 @@ export interface ResolvedOptions {
   followSymlinks: boolean;
   preserveDates: boolean;
   lqip: boolean;
+  cacheDir: string;
+  prune: boolean;
   include: string[];
   exclude: string[];
   concurrency: number;
@@ -203,6 +216,8 @@ export interface OptimizeResult {
   files: ProcessedFile[];
   skipped: SkippedFile[];
   failed: FailedFile[];
+  pruned: string[];
+  pruneErrors: PruneError[];
   totals: Totals;
 }
 

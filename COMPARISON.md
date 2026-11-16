@@ -1,7 +1,7 @@
 # How pixelpress compares
 
 Versions checked: sharp-cli 6.1, imagemin-cli 8.0, Squoosh CLI 0.7,
-vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.3 (October 2026).
+vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.4 (October 2026).
 
 `✅` first-class, `◐` possible with extra setup, `—` not a feature.
 
@@ -29,6 +29,8 @@ vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.3 (October 2026).
 | Bounded concurrency | ✅ | ◐ | ◐ | ✅ | ✅ | ✅ |
 | Dry run | ✅ | ✅ | — | — | — | — |
 | Clean output | ✅ | — | — | — | — | — |
+| Stale output pruning | ✅ | — | — | — | ◐ (bundler) | — |
+| Atomic output writes | ✅ | — | — | — | ◐ (bundler) | — |
 | Animated input | ✅ (WebP frames) | ✅ | ◐ (plugins) | ✅ | ◐ | ◐ |
 | Plugin / codec extensibility | — (planned) | ◐ | ✅ | ✅ (codecs) | ✅ | — |
 | Framework integration | — (planned) | — | — | — | ✅ | ✅ |

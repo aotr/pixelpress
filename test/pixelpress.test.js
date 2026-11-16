@@ -11,6 +11,7 @@ import { optimize, transcode } from '../src/index.js';
 
 const exec = promisify(execFile);
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+process.env.PIXELPRESS_CACHE_DIR = path.join(os.tmpdir(), 'pixelpress-test-cache');
 
 async function waitFor(predicate, timeout = 8000) {
   const startedAt = Date.now();
@@ -378,19 +379,34 @@ test('cache skips unchanged files and invalidates on option changes', async (t) 
   const input = path.join(dir, 'photo.jpg');
   await makeJpeg(input, 200, 100);
   const out = path.join(dir, 'out');
+  const cacheDir = path.join(dir, 'cache');
+  const options = { outDir: out, formats: ['webp'], cache: true, cacheDir };
 
-  const first = await optimize([input], { outDir: out, formats: ['webp'], cache: true });
+  const first = await optimize([input], options);
   assert.equal(first.files[0].cached, false);
   assert.equal(first.totals.cached, 0);
+  assert.equal((await fs.readdir(cacheDir)).length, 1);
+  await assert.rejects(fs.access(path.join(out, '.pixelpress-cache.json')));
 
-  const second = await optimize([input], { outDir: out, formats: ['webp'], cache: true });
+  const second = await optimize([input], options);
   assert.equal(second.files[0].cached, true);
   assert.equal(second.totals.cached, 1);
 
-  const changed = await optimize([input], { outDir: out, formats: ['webp'], quality: 20, cache: true });
+  // A 0.3 cache inside the output dir is migrated once and then removed.
+  const [cacheName] = await fs.readdir(cacheDir);
+  const cachePath = path.join(cacheDir, cacheName);
+  const legacyPath = path.join(out, '.pixelpress-cache.json');
+  await fs.copyFile(cachePath, legacyPath);
+  await fs.rm(cachePath);
+  const migrated = await optimize([input], options);
+  assert.equal(migrated.files[0].cached, true);
+  await assert.rejects(fs.access(legacyPath));
+  assert.equal((await fs.readdir(cacheDir)).length, 1);
+
+  const changed = await optimize([input], { ...options, quality: 20 });
   assert.equal(changed.files[0].cached, false);
 
-  const forced = await optimize([input], { outDir: out, formats: ['webp'], quality: 20, cache: true, force: true });
+  const forced = await optimize([input], { ...options, quality: 20, force: true });
   assert.equal(forced.files[0].cached, false);
 });
 
@@ -475,6 +491,9 @@ test('cli reads a config and writes picture snippets', async (t) => {
   assert.match(htmlReport, /<article class="card">/);
   assert.match(htmlReport, /cfg-photo-200\.webp/);
   assert.match(htmlReport, /smaller|larger/);
+
+  const leftovers = await fs.readdir(dir, { recursive: true });
+  assert.deepEqual(leftovers.filter((entry) => entry.endsWith('.tmp')), []);
 });
 
 test('cli dry run writes no images, manifest, or picture file', async (t) => {
@@ -644,4 +663,62 @@ test('cli streams one image to stdout from a file and stdin', async (t) => {
   const stdinMeta = await sharp(fromStdin.data).metadata();
   assert.equal(stdinMeta.format, 'webp');
   assert.equal(stdinMeta.width, 60);
+});
+
+test('prune removes stale variants and deleted sources, but keeps failed outputs', async (t) => {
+  const dir = await tempDir(t);
+  const source = path.join(dir, 'src');
+  const a = path.join(source, 'a.jpg');
+  const b = path.join(source, 'team', 'b.jpg');
+  await makeJpeg(a, 300, 200);
+  await makeJpeg(b, 300, 200);
+  const out = path.join(dir, 'out');
+  const cacheDir = path.join(dir, 'cache');
+  const common = { outDir: out, cache: true, cacheDir, prune: true, recursive: true };
+
+  const first = await optimize([source], {
+    ...common,
+    formats: ['webp', 'avif'],
+    widths: [100, 200],
+  });
+  assert.equal(first.totals.outputs, 8);
+  assert.equal(first.totals.pruned, 0);
+  await fs.access(path.join(out, 'a-200.avif'));
+  await fs.access(path.join(out, 'team', 'b-100.webp'));
+
+  await fs.rm(b);
+  const second = await optimize([source], {
+    ...common,
+    formats: ['webp'],
+    widths: [100],
+  });
+  assert.equal(second.files.length, 1);
+  assert.equal(second.totals.outputs, 1);
+  assert.equal(second.totals.pruned, 7);
+  await fs.access(path.join(out, 'a-100.webp'));
+  for (const stale of [
+    'a-100.avif', 'a-200.webp', 'a-200.avif',
+    'team/b-100.webp', 'team/b-100.avif', 'team/b-200.webp', 'team/b-200.avif',
+  ]) {
+    await assert.rejects(fs.access(path.join(out, stale)), `${stale} should be pruned`);
+  }
+  await assert.rejects(fs.access(path.join(out, 'team')));
+
+  await fs.writeFile(a, 'not an image');
+  const third = await optimize([source], {
+    ...common,
+    formats: ['webp'],
+    widths: [100],
+  });
+  assert.equal(third.failed.length, 1);
+  assert.equal(third.totals.pruned, 0);
+  await fs.access(path.join(out, 'a-100.webp'));
+
+  const entries = await fs.readdir(dir, { recursive: true });
+  assert.deepEqual(entries.filter((entry) => entry.endsWith('.tmp')), []);
+
+  await assert.rejects(
+    optimize([source], { outDir: out, formats: ['webp'], cache: false, prune: true }),
+    /prune requires cache/,
+  );
 });

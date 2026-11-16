@@ -1,5 +1,9 @@
 # pixelpress
 
+[![CI](https://github.com/aotr/pixelpress/actions/workflows/ci.yml/badge.svg)](https://github.com/aotr/pixelpress/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/pixelpress.svg)](https://www.npmjs.com/package/pixelpress)
+[![license](https://img.shields.io/npm/l/pixelpress.svg)](LICENSE)
+
 **Bulk image compression and transcoding.** Point it at a file, a folder, or a
 glob; get AVIF, WebP, JPEG, or PNG at responsive widths with sensible quality,
 a cache, a manifest, an HTML report, and ready-to-paste `<picture>` snippets.
@@ -190,8 +194,10 @@ reported as failed instead of writing an oversized output. Lossless and
 | `--public-path <path>` | `/` | URL prefix used in snippets. |
 | `--sizes <value>` | `100vw` | `sizes` attribute used in snippets. |
 | `--lqip` | off | Add a tiny WebP data-URI placeholder + dominant color. |
-| `--cache` | on | Reuse outputs from `.pixelpress-cache.json`. |
+| `--cache` | on | Reuse cached outputs. |
+| `--cache-dir <dir>` | `node_modules/.cache/pixelpress` | Cache location. |
 | `--no-cache` | — | Disable the cache. |
+| `--prune` | off | Delete outputs recorded in the cache that are no longer produced. |
 | `--force` | off | Re-encode even when the cache is valid. |
 | `--fail-fast` | off | Stop after the first failed file. |
 | `--concurrency <n>` | 4 | Files processed in parallel. |
@@ -219,6 +225,8 @@ Put defaults in `pixelpress.config.json` and run `pixelpress` with no inputs:
   "quality": { "avif": 50, "webp": 72 },
   "recursive": true,
   "cache": true,
+  "cacheDir": "node_modules/.cache/pixelpress",
+  "prune": true,
   "lqip": true,
   "manifest": "public/images.json",
   "picture": "src/_includes/picture.html",
@@ -248,25 +256,46 @@ working directory. JSON is recommended for portability.
 `--dry-run` writes neither images nor any requested manifest, picture, or
 report file.
 
-## Caching and watch mode
+## Caching, pruning, and watch mode
 
-The CLI enables a cache by default. It lives at
-`<outDir>/.pixelpress-cache.json` and stores each input's mtime, size, and
-outputs, keyed by a fingerprint of all encoding options. Changing quality,
-widths, transforms, or formats invalidates it automatically. Deleting an
-output or touching an input re-encodes that file.
+The CLI enables a cache by default. It lives **outside the output directory**,
+at `node_modules/.cache/pixelpress/cache-<hash>.json` (one file per output
+directory), and stores each input's mtime, size, and outputs, keyed by a
+fingerprint of all encoding options. Changing quality, widths, transforms, or
+formats invalidates skipping automatically.
 
 ```bash
-pixelpress photos -o dist -r          # first run: encodes
-pixelpress photos -o dist -r          # second run: cached
-pixelpress photos -o dist -r --force  # ignore the cache
+pixelpress photos -o dist -r                    # first run: encodes
+pixelpress photos -o dist -r                    # second run: cached
+pixelpress photos -o dist -r --force            # ignore the cache
 pixelpress photos -o dist -r --no-cache
+pixelpress photos -o dist -r --cache-dir .cache # custom location
 ```
 
+Older caches at `<outDir>/.pixelpress-cache.json` are read once and removed
+after the next save. The `PIXELPRESS_CACHE_DIR` environment variable sets the
+default location.
+
+`--prune` deletes outputs recorded in the cache that are no longer produced —
+for example after deleting a source, removing a format, or dropping a width:
+
+```bash
+pixelpress photos -o dist -r --prune
+```
+
+Pruning only removes regular files that the cache says are inside `--out`; it
+never deletes inputs, outputs for files that failed this run, or files for
+specs skipped by `--fail-fast`. Empty directories left behind are removed.
+`--prune` requires the cache, and `--dry-run` does not delete anything.
+
+Each image, report, manifest, picture file, and cache write goes through a
+temporary file in the destination directory and an atomic rename. A crash or
+Ctrl+C leaves the previous output intact instead of a half-written file.
+
 `--watch` performs the initial run, then waits for image changes and re-runs
-with the cache. Output writes are ignored, so it does not loop. Watches are
-recursive on platforms that support it; on other platforms the input root is
-watched non-recursively.
+with the cache and prune setting. Output writes are ignored, so it does not
+loop. Watches are recursive on platforms that support it; on other platforms
+the input root is watched non-recursively.
 
 Cache invalidation uses mtime + size, not content hashing, so replacing a file
 with identical mtime and size will be treated as unchanged. Use `--force` in
@@ -287,7 +316,7 @@ the current directory.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "options": { "formats": ["avif", "webp"], "widths": [480], "...": "..." },
   "files": [
     {
@@ -305,7 +334,9 @@ the current directory.
           "width": 480,
           "height": 320,
           "bytes": 14210,
-          "quality": 55
+          "quality": 55,
+          "animated": false,
+          "pages": 1
         },
         {
           "format": "webp",
@@ -313,15 +344,23 @@ the current directory.
           "width": 480,
           "height": 320,
           "bytes": 22981,
-          "quality": 72
+          "quality": 72,
+          "animated": false,
+          "pages": 1
         }
       ]
     }
   ],
+  "skipped": [],
+  "failed": [],
+  "pruned": [],
+  "pruneErrors": [],
   "totals": {
     "files": 1,
     "outputs": 2,
     "cached": 0,
+    "pruned": 0,
+    "pruneErrors": 0,
     "sourceBytes": 1436544,
     "outputBytes": 37191,
     "savedBytes": 1399353,
@@ -407,6 +446,8 @@ const report = await optimize(['public/images', 'static/**/*.png'], {
   include: ['*.jpg', '*.png'],
   exclude: ['*-draft.*'],
   cache: true,
+  cacheDir: 'node_modules/.cache/pixelpress',
+  prune: true,
   lqip: true,
   concurrency: 8,
 });
@@ -422,8 +463,9 @@ for (const file of report.files) {
 ```
 
 Every path in the API result is absolute. The cache is **off by default** in the
-API; pass `cache: true` to enable it. `force`, `clean`, `failFast`, and all
-transforms accept the same names as the CLI.
+API; pass `cache: true` to enable it. `cacheDir` changes its location and
+`prune: true` removes stale outputs (it requires `cache: true`). `force`,
+`clean`, `failFast`, and all transforms accept the same names as the CLI.
 
 Single image, buffer in and buffer out:
 
@@ -446,6 +488,21 @@ await fs.writeFile('upload.avif', data);
 `transcode` accepts a filesystem path, `Buffer`, or `Uint8Array` and applies the
 same transforms, format tuning, and size budget as `optimize`.
 
+## Releasing
+
+CI runs on Node 22 and 24 for Linux and macOS. For a release with npm
+provenance, configure this repository as a trusted publisher on npmjs.com:
+
+1. npmjs.com → package **pixelpress** → **Settings** → **Trusted publishing**.
+2. Choose **GitHub Actions**, repository `aotr/pixelpress`, workflow
+   `publish.yml`.
+3. Run the **Publish** workflow from the Actions tab.
+
+The workflow runs the test suite, then `npm publish --access public
+--provenance` using OIDC. No long-lived npm token is stored in GitHub. Local
+publishing still works with `npm publish --access public`; the manual workflow
+is intentionally not triggered by tags until trusted publishing is configured.
+
 ## Behavior and limits
 
 - **Never overwrites the input.** Output that resolves to an input file is
@@ -453,6 +510,11 @@ same transforms, format tuning, and size budget as `optimize`.
 - **No upscaling** unless `--enlarge`. Responsive widths above the source are
   dropped.
 - **Output collisions are errors**, not silent overwrites.
+- **Writes are atomic**: images, reports, manifests, picture files, and caches
+  are written to a temp file and renamed, so a crash cannot leave a partial
+  final file.
+- **Stale outputs can be pruned** with `--prune`, using the cache's output
+  index. Failed files and inputs outside the current run are handled safely.
 - **Per-file failures do not stop the run** unless `--fail-fast`; the CLI exits
   `1` if anything failed.
 - **Metadata is stripped by default** (including GPS); pass `--keep-metadata`

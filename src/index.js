@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
+import { writeAtomic } from './atomic.js';
 import { loadCache, saveCache } from './cache.js';
 
 export const OUTPUT_FORMATS = ['avif', 'webp', 'jpeg', 'png'];
@@ -48,7 +49,9 @@ export async function optimize(inputs, options = {}) {
     if (!cfg.dryRun) await fs.rm(cfg.outDir, { recursive: true, force: true });
   }
 
-  const cache = cfg.cache && !cfg.dryRun ? await loadCache(cfg.outDir, fingerprint(cfg)) : null;
+  const cache = cfg.cache && !cfg.dryRun
+    ? await loadCache(cfg.cacheDir, cfg.outDir, fingerprint(cfg))
+    : null;
   const claimed = new Map();
   const processOne = (spec) => processSource(spec, cfg, claimed, cache);
 
@@ -74,6 +77,21 @@ export async function optimize(inputs, options = {}) {
   skipped.sort((a, b) => a.input.localeCompare(b.input));
   failed.sort((a, b) => a.input.localeCompare(b.input));
 
+  const handled = new Set();
+  const skippedInputs = new Set();
+  for (const result of settled) {
+    if (result.file) handled.add(result.file.input);
+    if (result.failed) handled.add(result.failed.input);
+    if (result.skipped) {
+      handled.add(result.skipped.input);
+      skippedInputs.add(result.skipped.input);
+    }
+  }
+
+  const pruned = cache && cfg.prune && !cfg.dryRun
+    ? await pruneOutputs(cache.previousFiles, cfg, files, failed, specs, handled, skippedInputs)
+    : { pruned: [], errors: [] };
+
   const sourceBytes = files.reduce((sum, file) => sum + file.sourceBytes, 0);
   const outputBytes = cfg.dryRun
     ? null
@@ -94,7 +112,9 @@ export async function optimize(inputs, options = {}) {
         dominantColor: file.dominantColor,
       };
     }
-    await saveCache(cache, entries);
+    // Keep the old cache when a prune deletion failed so the next run can
+    // retry instead of forgetting about the stale path.
+    if (pruned.errors.length === 0) await saveCache(cache, entries);
   }
 
   return {
@@ -102,10 +122,14 @@ export async function optimize(inputs, options = {}) {
     files,
     skipped,
     failed,
+    pruned: pruned.pruned,
+    pruneErrors: pruned.errors,
     totals: {
       files: files.length,
       outputs: files.reduce((sum, file) => sum + file.outputs.length, 0),
       cached: files.filter((file) => file.cached).length,
+      pruned: pruned.pruned.length,
+      pruneErrors: pruned.errors.length,
       sourceBytes,
       outputBytes,
       savedBytes: outputBytes === null ? null : sourceBytes - outputBytes,
@@ -189,6 +213,12 @@ function normalizeOptions(options) {
 
   const prefix = normalizeAffix(options.prefix, 'prefix');
   const suffix = normalizeAffix(options.suffix, 'suffix');
+  const cache = Boolean(options.cache);
+  const prune = Boolean(options.prune);
+  if (prune && !cache) throw new TypeError('prune requires cache: true');
+  const cacheDir = path.resolve(
+    options.cacheDir ?? process.env.PIXELPRESS_CACHE_DIR ?? path.join('node_modules', '.cache', 'pixelpress'),
+  );
 
   return {
     ...image,
@@ -201,7 +231,9 @@ function normalizeOptions(options) {
     recursive: Boolean(options.recursive),
     flat: Boolean(options.flat),
     dryRun: Boolean(options.dryRun),
-    cache: Boolean(options.cache),
+    cache,
+    cacheDir,
+    prune,
     force: Boolean(options.force),
     clean: Boolean(options.clean),
     failFast: Boolean(options.failFast),
@@ -492,6 +524,8 @@ function toNonNegativeInt(value, label) {
 function sanitizeOptions(cfg) {
   const copy = { ...cfg };
   delete copy.cache;
+  delete copy.cacheDir;
+  delete copy.prune;
   delete copy.force;
   delete copy.dryRun;
   delete copy.failFast;
@@ -687,6 +721,66 @@ function assertSafeClean(cfg, inputs) {
   }
 }
 
+async function pruneOutputs(previousFiles, cfg, files, failed, specs, handled, skippedInputs) {
+  const current = new Set();
+  for (const file of files) {
+    for (const output of file.outputs) current.add(output.path);
+  }
+
+  const failedInputs = new Set(failed.map((item) => item.input));
+  const specInputs = new Set(specs.map((spec) => spec.file));
+  const candidates = new Map();
+
+  for (const [input, entry] of Object.entries(previousFiles)) {
+    if (!entry || !Array.isArray(entry.outputs)) continue;
+    if (failedInputs.has(input) || skippedInputs.has(input)) continue;
+    // A fail-fast run may leave later specs untouched; never prune those.
+    if (specInputs.has(input) && !handled.has(input)) continue;
+
+    for (const output of entry.outputs) {
+      if (!output || typeof output.path !== 'string' || !path.isAbsolute(output.path)) continue;
+      if (current.has(output.path)) continue;
+      if (!isInside(cfg.outDir, output.path)) continue;
+      if (specInputs.has(output.path)) continue;
+      candidates.set(output.path, input);
+    }
+  }
+
+  const pruned = [];
+  const errors = [];
+  const directories = new Set();
+
+  for (const candidate of candidates.keys()) {
+    try {
+      const stat = await fs.lstat(candidate);
+      if (!stat.isFile() && !stat.isSymbolicLink()) continue;
+      await fs.rm(candidate, { force: true });
+      pruned.push(candidate);
+      directories.add(path.dirname(candidate));
+    } catch (error) {
+      if (error.code !== 'ENOENT') errors.push({ path: candidate, error: error.message });
+    }
+  }
+
+  await removeEmptyDirs(directories, cfg.outDir);
+  return { pruned, errors };
+}
+
+async function removeEmptyDirs(directories, stopAt) {
+  const deepestFirst = [...directories].sort((a, b) => b.length - a.length);
+  for (const start of deepestFirst) {
+    let directory = start;
+    while (isInside(stopAt, directory)) {
+      try {
+        await fs.rmdir(directory);
+      } catch {
+        break;
+      }
+      directory = path.dirname(directory);
+    }
+  }
+}
+
 async function processSource(spec, cfg, claimed, cache) {
   const stat = await fs.stat(spec.file);
   const cached = await fromCache(spec, cfg, cache, claimed, stat);
@@ -730,14 +824,14 @@ async function processSource(spec, cfg, claimed, cache) {
       if (!cfg.dryRun) {
         await fs.mkdir(path.dirname(outPath), { recursive: true });
         if (encoded) {
-          await fs.writeFile(outPath, encoded.data);
+          await writeAtomic(outPath, (temporary) => fs.writeFile(temporary, encoded.data));
         } else {
-          info = await buildPipeline(spec.file, cfg, format, {
+          info = await writeAtomic(outPath, (temporary) => buildPipeline(spec.file, cfg, format, {
             width: variant.width,
             height: variant.height,
             quality,
             animated: keepFrames,
-          }).toFile(outPath);
+          }).toFile(temporary));
         }
         if (cfg.preserveDates) {
           await fs.utimes(outPath, stat.atime, stat.mtime);

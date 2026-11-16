@@ -1,7 +1,7 @@
 {
   "name": "pixelpress",
-  "version": "0.3.0",
-  "description": "Bulk image compression and transcoding to AVIF, WebP, JPEG, and PNG — globs, responsive widths, transforms, animated WebP, size budgets, cache, watch, HTML reports, and picture snippets.",
+  "version": "0.4.0",
+  "description": "Bulk image compression and transcoding to AVIF, WebP, JPEG, and PNG — globs, responsive widths, transforms, animated WebP, size budgets, cache with pruning, watch, HTML reports, and picture snippets.",
   "type": "module",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
