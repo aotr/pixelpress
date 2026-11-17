@@ -1,7 +1,7 @@
 # How pixelpress compares
 
 Versions checked: sharp-cli 6.1, imagemin-cli 8.0, Squoosh CLI 0.7,
-vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.7 (November 2026).
+vite-imagetools 12.0, @11ty/eleventy-img 7.1, pixelpress 0.8 (November 2026).
 
 `✅` first-class, `◐` possible with extra setup, `—` not a feature.
 

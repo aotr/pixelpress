@@ -137,10 +137,14 @@ stdin/stdout piping.
   it; otherwise one watcher per directory, refreshed as subdirectories are
   created or removed. New directories are picked up without restarting.
 
-## 0.8
+## 0.8 — shipped
 
-- **Config reload**: re-read `pixelpress.config.json` while watching without a
-  restart.
+- **Config reload**: editing `pixelpress.config.json` while watching rebuilds
+  options, inputs, output paths, and watchers without a restart. A broken
+  config is reported and the previous runtime keeps running.
+
+## 0.9
+
 - **Animated AVIF** when sharp/libvips exposes reliable frame output.
 - **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
   `--max-bytes`.
@@ -155,11 +159,11 @@ stdin/stdout piping.
 
 ## Quality bar
 
-- 32 `node:test` cases cover API, globs, filters, quality, transforms, max
+- 33 `node:test` cases cover API, globs, filters, quality, transforms, max
   bytes, cache invalidation and migration, pruning, atomic temp cleanup, clean
   safety, LQIP, config, srcset, presets, init, hooks, animated frames, reports,
-  stdout, partial-run rollback, watch fallback, collisions, alpha flattening,
-  EXIF orientation, and CLI behavior.
+  stdout, partial-run rollback, watch fallback, config reload, collisions,
+  alpha flattening, EXIF orientation, and CLI behavior.
 - Every option appears in `--help` and the README.
 - Dry runs touch nothing. Clean refuses unsafe paths. Output never overwrites
   an input. Prune only deletes cached outputs inside the output directory.

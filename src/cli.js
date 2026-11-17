@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { createRequire } from 'node:module';
+import { watch as fsWatch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -140,7 +141,7 @@ async function main() {
     return;
   }
 
-  const config = await resolveConfig(values);
+  const { config, file: configFile } = await resolveConfig(values);
   if (values.watch && values.json) throw new Error('--watch cannot be combined with --json');
   if (values.watch && (values['dry-run'] || config.dryRun)) throw new Error('--watch cannot be combined with --dry-run');
   if (values.watch && (values.clean || config.clean)) throw new Error('--watch cannot be combined with --clean');
@@ -152,27 +153,14 @@ async function main() {
   }
 
   const options = buildOptions(values, config);
-  const flags = {
-    json: Boolean(values.json),
-    quiet: Boolean(values.quiet),
-    verbose: Boolean(values.verbose),
-    manifest: values.manifest ?? config.manifest,
-    picture: values.picture ?? config.picture,
-    report: values.report ?? config.report,
-    publicPath: values['public-path'] ?? config.publicPath ?? '/',
-    sizes: values.sizes ?? config.sizes ?? '100vw',
-    watch: Boolean(values.watch),
-  };
-
-  if (values['no-cache'] === true) options.cache = false;
-  if (values.cache === true) options.cache = true;
-  if (options.cache === undefined) options.cache = true;
+  const flags = buildFlags(values, config);
+  applyCacheDefaults(values, options);
 
   const stdoutRequested = Boolean(values.stdout) || values.out === '-' || values['out-dir'] === '-';
   if (flags.watch && stdoutRequested) throw new Error('--watch cannot be combined with --stdout');
 
   if (flags.watch) {
-    await watchMode(inputs, options, flags);
+    await watchMode({ values, positionals, inputs, options, flags, configFile });
     return;
   }
 
@@ -302,16 +290,15 @@ async function initConfig(configPath) {
   process.stdout.write('Edit inputs/outDir, then run: pixelpress\n');
 }
 
-async function resolveConfig(values) {  let file = null;
-  if (values.config) {
-    file = path.resolve(values.config);
-  } else {
-    const candidate = path.resolve(DEFAULT_CONFIG);
+async function resolveConfig(values) {
+  const candidate = path.resolve(values.config ?? DEFAULT_CONFIG);
+  let file = candidate;
+  if (!values.config) {
     try {
       await fs.access(candidate);
-      file = candidate;
     } catch {
-      return {};
+      // Keep the candidate path so watch mode can detect config creation.
+      return { config: {}, file: candidate };
     }
   }
 
@@ -335,7 +322,7 @@ async function resolveConfig(values) {  let file = null;
   if (config.format != null && config.formats == null) config.formats = config.format;
   delete config.out;
   delete config.format;
-  return config;
+  return { config, file };
 }
 
 function buildOptions(values, config) {
@@ -413,6 +400,35 @@ function buildOptions(values, config) {
   if (values.concurrency != null) options.concurrency = Number(values.concurrency);
 
   return options;
+}
+
+function buildFlags(values, config) {
+  return {
+    json: Boolean(values.json),
+    quiet: Boolean(values.quiet),
+    verbose: Boolean(values.verbose),
+    manifest: values.manifest ?? config.manifest,
+    picture: values.picture ?? config.picture,
+    report: values.report ?? config.report,
+    publicPath: values['public-path'] ?? config.publicPath ?? '/',
+    sizes: values.sizes ?? config.sizes ?? '100vw',
+    watch: Boolean(values.watch),
+  };
+}
+
+function applyCacheDefaults(values, options) {
+  if (values['no-cache'] === true) options.cache = false;
+  if (values.cache === true) options.cache = true;
+  if (options.cache === undefined) options.cache = true;
+}
+
+async function loadRuntime(values, positionals) {
+  const { config, file: configFile } = await resolveConfig(values);
+  const inputs = positionals.length > 0 ? positionals : toArray(config.inputs);
+  if (inputs.length === 0) throw new Error('no inputs found in config');
+  const options = buildOptions(values, config);
+  applyCacheDefaults(values, options);
+  return { config, configFile, inputs, options, flags: buildFlags(values, config) };
 }
 
 async function runOnce(inputs, options, flags) {
@@ -607,10 +623,15 @@ function printResult(result, flags) {  const { totals } = result;
   if (totals.pruneErrors > 0) log(flags, red(`${count(totals.pruneErrors, 'prune error')}`));
 }
 
-async function watchMode(inputs, options, flags) {
+async function watchMode({ values, positionals, inputs, options, flags, configFile }) {
+  let active = { inputs, options, flags };
   let running = false;
   let pending = false;
   let timer = null;
+  let configTimer = null;
+  let watcher = null;
+  let configWatcher = null;
+  let watcherKey = '';
 
   const schedule = () => {
     pending = true;
@@ -626,8 +647,10 @@ async function watchMode(inputs, options, flags) {
     running = true;
     pending = false;
     try {
-      if (announce && !flags.quiet) log(flags, dim(`\n[${new Date().toLocaleTimeString()}] change detected`));
-      await runOnce(inputs, options, flags);
+      if (announce && !active.flags.quiet) {
+        log(active.flags, dim(`\n[${new Date().toLocaleTimeString()}] change detected`));
+      }
+      await runOnce(active.inputs, active.options, active.flags);
     } catch (error) {
       process.stderr.write(`pixelpress: ${error.message}\n`);
     } finally {
@@ -636,29 +659,83 @@ async function watchMode(inputs, options, flags) {
     }
   };
 
+  const setupWatchers = async () => {
+    const roots = await watchRoots(active.inputs);
+    const key = `${active.options.outDir}\n${[...roots].sort().join('\n')}`;
+    if (watcher && key === watcherKey) return roots;
+    watcher?.close();
+    watcher = await createWatcher({
+      roots,
+      outDir: active.options.outDir,
+      forceFallback: /^(1|true)$/i.test(process.env.PIXELPRESS_WATCH_FALLBACK ?? ''),
+      onChange: (changed) => {
+        if (!isIgnoredChange(changed, active.options, active.flags)) schedule();
+      },
+      onError: (error) => process.stderr.write(`pixelpress: watch error: ${error.message}\n`),
+    });
+    watcherKey = key;
+    return roots;
+  };
+
   await run({ announce: false });
+  let roots = await setupWatchers();
 
-  const roots = await watchRoots(inputs);
-  const watcher = await createWatcher({
-    roots,
-    outDir: options.outDir,
-    forceFallback: /^(1|true)$/i.test(process.env.PIXELPRESS_WATCH_FALLBACK ?? ''),
-    onChange: (changed) => {
-      if (!isIgnoredChange(changed, options, flags)) schedule();
-    },
-    onError: (error) => process.stderr.write(`pixelpress: watch error: ${error.message}\n`),
-  });
+  const reload = async () => {
+    try {
+      const next = await loadRuntime(values, positionals);
+      if (next.options.dryRun) throw new Error('--watch cannot be combined with --dry-run');
+      if (next.options.clean) throw new Error('--watch cannot be combined with --clean');
+      active = { inputs: next.inputs, options: next.options, flags: next.flags };
+      roots = await setupWatchers();
+      if (!active.flags.quiet) {
+        log(active.flags, dim(`config reloaded · watching ${roots.join(', ')}`));
+      }
+      schedule();
+    } catch (error) {
+      process.stderr.write(`pixelpress: config reload failed: ${error.message}\n`);
+    }
+  };
 
-  if (!flags.quiet) {
-    log(flags, dim(`\nwatching ${roots.join(', ')}${watcher.fallback ? ' · fallback watchers' : ''} · Ctrl+C to stop`));
+  const onConfigChange = () => {
+    clearTimeout(configTimer);
+    configTimer = setTimeout(() => { reload(); }, 300);
+  };
+  if (configFile) {
+    configWatcher = watchConfigFile(
+      configFile,
+      onConfigChange,
+      (error) => process.stderr.write(`pixelpress: config watch error: ${error.message}\n`),
+    );
   }
+
+  if (!active.flags.quiet) {
+    log(active.flags, dim(`\nwatching ${roots.join(', ')}${watcher.fallback ? ' · fallback watchers' : ''} · Ctrl+C to stop`));
+  }
+
   const close = () => {
-    watcher.close();
+    watcher?.close();
+    configWatcher?.close();
     clearTimeout(timer);
+    clearTimeout(configTimer);
     process.exit(0);
   };
   process.once('SIGINT', close);
   process.once('SIGTERM', close);
+}
+
+function watchConfigFile(file, onChange, onError) {
+  const directory = path.dirname(file);
+  const name = path.basename(file);
+  try {
+    const watcher = fsWatch(directory, { persistent: true }, (_event, filename) => {
+      if (!filename || String(filename) === name) onChange();
+    });
+    watcher.on('error', onError);
+    return watcher;
+  } catch (error) {
+    onError(error);
+    return null;
+  }
 }
 
 function isIgnoredChange(changed, options, flags) {

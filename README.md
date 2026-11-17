@@ -345,7 +345,8 @@ temporary file in the destination directory and an atomic rename. A crash or
 Ctrl+C leaves the previous output intact instead of a half-written file.
 
 `--watch` performs the initial run, then waits for image changes and re-runs
-with the cache and prune setting. Output writes are ignored, so it does not
+with the cache and prune setting. Changes to the config file are reloaded
+without restarting the watcher. Output writes are ignored, so it does not
 loop. Recursive `fs.watch` is used where the platform supports it; elsewhere
 pixelpress watches every directory and adds new subdirectories as they appear.
 

@@ -29,7 +29,7 @@
       <a class="nav-ext" href="https://github.com/aotr/pixelpress">GitHub ↗</a>
       <a class="nav-ext" href="https://www.npmjs.com/package/pixelpress">npm ↗</a>
     </nav>
-    <span class="version-pill">v0.7.0</span>
+    <span class="version-pill">v0.8.0</span>
   </div>
 </header>
 
@@ -263,7 +263,7 @@ pixelpress photos -o dist -r --cache-dir .cache
 pixelpress photos -o dist -r --watch</pre>
         </div>
         <p><code>--prune</code> only deletes regular files recorded in the cache and inside <code>--out</code>. It never deletes inputs, failed-file outputs, or fail-fast leftovers, and it removes empty directories. A dry run does not delete. Cache writes are atomic and best-effort; a read-only cache directory never fails an image run.</p>
-        <p><code>--watch</code> uses recursive <code>fs.watch</code> where the platform supports it. Elsewhere it watches every directory and refreshes the watcher set as subdirectories appear or disappear.</p>
+        <p><code>--watch</code> uses recursive <code>fs.watch</code> where the platform supports it. Elsewhere it watches every directory and refreshes the watcher set as subdirectories appear or disappear. Editing <code>pixelpress.config.json</code> reloads it without restarting the watcher; a broken config is reported and the previous runtime keeps running.</p>
         <div class="note">Cache invalidation uses mtime + size. Replacing a file while keeping both identical is treated as unchanged. Use <code>--force</code> when in doubt.</div>
       </section>
 
@@ -336,7 +336,7 @@ pixelpress photos -o dist -r --watch</pre>
     </div>
     <div class="footer-bottom">
       <span>© <span data-year>2026</span> Animesh Chakraborty · MIT</span>
-      <span>v0.7.0 · Node 22.5+</span>
+      <span>v0.8.0 · Node 22.5+</span>
     </div>
   </div>
 </footer>

@@ -955,3 +955,50 @@ test('watch fallback watches nested directories', { timeout: 20_000 }, async (t)
   child.kill('SIGTERM');
   await waitFor(() => child.exitCode !== null || child.signalCode !== null);
 });
+
+test('watch reloads pixelpress.config.json without restarting', { timeout: 25_000 }, async (t) => {
+  const dir = await tempDir(t);
+  const input = path.join(dir, 'src', 'photo.jpg');
+  await makeJpeg(input, 300, 200);
+  const out = path.join(dir, 'out');
+  const output = path.join(out, 'photo.webp');
+  const configPath = path.join(dir, 'pixelpress.config.json');
+  const writeConfig = (width) => fs.writeFile(configPath, JSON.stringify({
+    inputs: ['src'],
+    outDir: 'out',
+    formats: ['webp'],
+    width,
+    cache: false,
+  }, null, 2));
+  await writeConfig(100);
+
+  const child = spawn(process.execPath, [
+    path.join(root, 'src', 'cli.js'),
+    '--config', 'pixelpress.config.json',
+    '--watch',
+  ], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  const outputLog = [];
+  child.stdout.on('data', (chunk) => outputLog.push(chunk.toString()));
+  child.stderr.on('data', (chunk) => outputLog.push(chunk.toString()));
+
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+  });
+
+  const outputWidth = async () => {
+    try {
+      return (await sharp(await fs.readFile(output)).metadata()).width;
+    } catch {
+      return null;
+    }
+  };
+
+  await waitFor(async () => await outputWidth() === 100);
+  await waitFor(() => outputLog.join('').includes('watching'));
+  await writeConfig(200);
+
+  await waitFor(async () => await outputWidth() === 200, 12_000);
+
+  child.kill('SIGTERM');
+  await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+});
