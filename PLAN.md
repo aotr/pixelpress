@@ -124,18 +124,19 @@ stdin/stdout piping.
 
 - Package homepage and README now point at the GitHub Pages site.
 
-## 0.6
+## 0.6 — shipped
 
 - **Plugin hooks**: `hooks.beforeEncode(pipeline, context)` modifies the sharp
   pipeline before encoding (e.g. composite a watermark); `hooks.afterEncode`
   inspects or replaces the final bytes. API and JS-config only; covered by the
   cache fingerprint.
+
+## 0.7
+
 - **Animated AVIF** when sharp/libvips exposes reliable frame output.
 - **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
   `--max-bytes`.
 - **Framework adapters**: Vite plugin, Next.js loader, Astro integration.
-- **Plugin hooks**: optional pre/post transform functions for the API (e.g.
-  watermarking).
 - **Better watch fallback**: chokidar-style recursive watching on platforms
   without recursive `fs.watch`, plus config-file reloads.
 
