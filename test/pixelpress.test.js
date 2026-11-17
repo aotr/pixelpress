@@ -894,3 +894,64 @@ test('changing hooks invalidates the cache; invalid hooks throw', async (t) => {
     /hooks must be an object/,
   );
 });
+
+test('watch fallback watches nested directories', { timeout: 20_000 }, async (t) => {
+  const dir = await tempDir(t);
+  const source = path.join(dir, 'src');
+  const input = path.join(source, 'nested', 'photo.jpg');
+  await makeJpeg(input, 160, 120);
+  const out = path.join(dir, 'out');
+  const output = path.join(out, 'nested', 'photo.webp');
+
+  const child = spawn(process.execPath, [
+    path.join(root, 'src', 'cli.js'),
+    source,
+    '--out', out,
+    '--formats', 'webp',
+    '--recursive',
+    '--watch',
+    '--quiet',
+  ], {
+    stdio: 'ignore',
+    env: { ...process.env, PIXELPRESS_WATCH_FALLBACK: '1' },
+  });
+
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+  });
+
+  await waitFor(async () => {
+    try {
+      await fs.access(output);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const before = await fs.stat(output);
+
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  await makeJpeg(input, 300, 200);
+  const now = new Date();
+  await fs.utimes(input, now, now);
+
+  await waitFor(async () => {
+    const after = await fs.stat(output);
+    return after.size !== before.size || after.mtimeMs > before.mtimeMs;
+  });
+
+  const added = path.join(source, 'added', 'new.jpg');
+  await makeJpeg(added, 120, 80);
+  const addedOutput = path.join(out, 'added', 'new.webp');
+  await waitFor(async () => {
+    try {
+      await fs.access(addedOutput);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  child.kill('SIGTERM');
+  await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+});

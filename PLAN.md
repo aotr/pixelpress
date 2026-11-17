@@ -131,14 +131,20 @@ stdin/stdout piping.
   inspects or replaces the final bytes. API and JS-config only; covered by the
   cache fingerprint.
 
-## 0.7
+## 0.7 — shipped
 
+- **Portable watch fallback**: recursive `fs.watch` where the platform supports
+  it; otherwise one watcher per directory, refreshed as subdirectories are
+  created or removed. New directories are picked up without restarting.
+
+## 0.8
+
+- **Config reload**: re-read `pixelpress.config.json` while watching without a
+  restart.
 - **Animated AVIF** when sharp/libvips exposes reliable frame output.
 - **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
   `--max-bytes`.
 - **Framework adapters**: Vite plugin, Next.js loader, Astro integration.
-- **Better watch fallback**: chokidar-style recursive watching on platforms
-  without recursive `fs.watch`, plus config-file reloads.
 
 ## Non-goals
 
@@ -149,11 +155,11 @@ stdin/stdout piping.
 
 ## Quality bar
 
-- 31 `node:test` cases cover API, globs, filters, quality, transforms, max
+- 32 `node:test` cases cover API, globs, filters, quality, transforms, max
   bytes, cache invalidation and migration, pruning, atomic temp cleanup, clean
   safety, LQIP, config, srcset, presets, init, hooks, animated frames, reports,
-  stdout, partial-run rollback, collisions, alpha flattening, EXIF orientation,
-  and CLI behavior.
+  stdout, partial-run rollback, watch fallback, collisions, alpha flattening,
+  EXIF orientation, and CLI behavior.
 - Every option appears in `--help` and the README.
 - Dry runs touch nothing. Clean refuses unsafe paths. Output never overwrites
   an input. Prune only deletes cached outputs inside the output directory.

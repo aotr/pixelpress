@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { createRequire } from 'node:module';
-import { watch as fsWatch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { writeFileAtomic } from './atomic.js';
 import { optimize, transcode } from './index.js';
+import { createWatcher } from './watch.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -639,30 +639,21 @@ async function watchMode(inputs, options, flags) {
   await run({ announce: false });
 
   const roots = await watchRoots(inputs);
-  const watchers = [];
-  for (const root of roots) {
-    try {
-      const watcher = fsWatch(root, { recursive: true }, (_, filename) => {
-        const changed = filename ? path.resolve(root, filename) : root;
-        if (isIgnoredChange(changed, options, flags)) return;
-        schedule();
-      });
-      watcher.on('error', (error) => process.stderr.write(`pixelpress: watch error: ${error.message}\n`));
-      watchers.push(watcher);
-    } catch (error) {
-      if (error.code !== 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM') throw error;
-      const watcher = fsWatch(root, (_, filename) => {
-        const changed = filename ? path.resolve(root, filename) : root;
-        if (isIgnoredChange(changed, options, flags)) return;
-        schedule();
-      });
-      watchers.push(watcher);
-    }
-  }
+  const watcher = await createWatcher({
+    roots,
+    outDir: options.outDir,
+    forceFallback: /^(1|true)$/i.test(process.env.PIXELPRESS_WATCH_FALLBACK ?? ''),
+    onChange: (changed) => {
+      if (!isIgnoredChange(changed, options, flags)) schedule();
+    },
+    onError: (error) => process.stderr.write(`pixelpress: watch error: ${error.message}\n`),
+  });
 
-  if (!flags.quiet) log(flags, dim(`\nwatching ${roots.join(', ')} · Ctrl+C to stop`));
+  if (!flags.quiet) {
+    log(flags, dim(`\nwatching ${roots.join(', ')}${watcher.fallback ? ' · fallback watchers' : ''} · Ctrl+C to stop`));
+  }
   const close = () => {
-    for (const watcher of watchers) watcher.close();
+    watcher.close();
     clearTimeout(timer);
     process.exit(0);
   };

@@ -346,8 +346,8 @@ Ctrl+C leaves the previous output intact instead of a half-written file.
 
 `--watch` performs the initial run, then waits for image changes and re-runs
 with the cache and prune setting. Output writes are ignored, so it does not
-loop. Watches are recursive on platforms that support it; on other platforms
-the input root is watched non-recursively.
+loop. Recursive `fs.watch` is used where the platform supports it; elsewhere
+pixelpress watches every directory and adds new subdirectories as they appear.
 
 Cache invalidation uses mtime + size, not content hashing, so replacing a file
 with identical mtime and size will be treated as unchanged. Use `--force` in
