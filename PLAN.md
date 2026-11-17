@@ -126,6 +126,10 @@ stdin/stdout piping.
 
 ## 0.6
 
+- **Plugin hooks**: `hooks.beforeEncode(pipeline, context)` modifies the sharp
+  pipeline before encoding (e.g. composite a watermark); `hooks.afterEncode`
+  inspects or replaces the final bytes. API and JS-config only; covered by the
+  cache fingerprint.
 - **Animated AVIF** when sharp/libvips exposes reliable frame output.
 - **Perceptual quality targeting**: a Butteraugli/SSIM option in addition to
   `--max-bytes`.
@@ -144,9 +148,9 @@ stdin/stdout piping.
 
 ## Quality bar
 
-- 28 `node:test` cases cover API, globs, filters, quality, transforms, max
+- 31 `node:test` cases cover API, globs, filters, quality, transforms, max
   bytes, cache invalidation and migration, pruning, atomic temp cleanup, clean
-  safety, LQIP, config, srcset, presets, init, animated frames, reports,
+  safety, LQIP, config, srcset, presets, init, hooks, animated frames, reports,
   stdout, partial-run rollback, collisions, alpha flattening, EXIF orientation,
   and CLI behavior.
 - Every option appears in `--help` and the README.

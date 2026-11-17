@@ -821,3 +821,76 @@ test('cli init writes a config and refuses to overwrite it', async (t) => {
     },
   );
 });
+
+test('beforeEncode hook can composite a watermark', async (t) => {
+  const dir = await tempDir(t);
+  const input = path.join(dir, 'photo.jpg');
+  await makeJpeg(input, 400, 300);
+  const mark = await sharp({ create: { width: 80, height: 30, channels: 4, background: { r: 201, g: 255, b: 61, alpha: 1 } } }).png().toBuffer();
+
+  const plain = await optimize([input], { outDir: path.join(dir, 'plain'), formats: ['webp'], cache: false });
+  const marked = await optimize([input], {
+    outDir: path.join(dir, 'marked'),
+    formats: ['webp'],
+    cache: false,
+    hooks: { beforeEncode: (pipeline) => pipeline.composite([{ input: mark, gravity: 'southeast' }]) },
+  });
+
+  assert.equal(marked.failed.length, 0);
+  assert.equal(marked.files[0].outputs[0].width, 400);
+  assert.equal(marked.files[0].outputs[0].height, 300);
+  const before = await fs.readFile(plain.files[0].outputs[0].path);
+  const after = await fs.readFile(marked.files[0].outputs[0].path);
+  assert.ok(!before.equals(after), 'watermarked bytes should differ');
+});
+
+test('afterEncode hook can replace bytes and applies without hash or maxBytes', async (t) => {
+  const dir = await tempDir(t);
+  const input = path.join(dir, 'photo.jpg');
+  await makeJpeg(input, 200, 100);
+
+  const result = await optimize([input], {
+    outDir: path.join(dir, 'out'),
+    formats: ['webp'],
+    cache: false,
+    hooks: { afterEncode: async ({ data }) => data.subarray(0, 64) },
+  });
+
+  assert.equal(result.failed.length, 0);
+  const output = result.files[0].outputs[0];
+  assert.equal(output.bytes, 64);
+  assert.equal((await fs.stat(output.path)).size, 64);
+
+  const transcoded = await transcode(await fs.readFile(input), {
+    format: 'webp',
+    hooks: { afterEncode: ({ data }) => data.subarray(0, 32) },
+  });
+  assert.equal(transcoded.data.length, 32);
+  assert.equal(transcoded.info.bytes, 32);
+});
+
+test('changing hooks invalidates the cache; invalid hooks throw', async (t) => {
+  const dir = await tempDir(t);
+  const input = path.join(dir, 'photo.jpg');
+  await makeJpeg(input, 200, 100);
+  const common = { outDir: path.join(dir, 'out'), formats: ['webp'], cache: true, cacheDir: path.join(dir, 'cache') };
+
+  const first = await optimize([input], { ...common, hooks: { beforeEncode: (pipeline) => pipeline } });
+  assert.equal(first.files[0].cached, false);
+  const second = await optimize([input], { ...common, hooks: { beforeEncode: (pipeline) => pipeline } });
+  assert.equal(second.files[0].cached, true);
+  const changed = await optimize([input], {
+    ...common,
+    hooks: { beforeEncode: (pipeline) => pipeline.grayscale() },
+  });
+  assert.equal(changed.files[0].cached, false);
+
+  await assert.rejects(
+    optimize([input], { ...common, hooks: { beforeEncode: 'nope' } }),
+    /hooks\.beforeEncode must be a function/,
+  );
+  await assert.rejects(
+    optimize([input], { ...common, hooks: 'nope' }),
+    /hooks must be an object/,
+  );
+});

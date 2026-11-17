@@ -31,6 +31,40 @@ export interface ExtendOptions {
   left?: number;
 }
 
+export interface EncodeContext {
+  /** File path or buffer being encoded. */
+  input: string | Buffer | Uint8Array;
+  format: OutputFormat;
+  width: number | null;
+  height: number | null;
+  quality: number;
+  animated: boolean;
+}
+
+export interface EncodedImage {
+  data: Buffer;
+  info: {
+    width: number;
+    height: number;
+    size: number;
+    [key: string]: unknown;
+  };
+}
+
+export interface EncodeHooks {
+  /**
+   * Modify the sharp pipeline before encoding (e.g. composite a watermark).
+   * May mutate the pipeline in place or return a replacement.
+   */
+  beforeEncode?: ((pipeline: import('sharp').Sharp, context: EncodeContext) => import('sharp').Sharp | void | Promise<import('sharp').Sharp | void>) | null;
+  /**
+   * Inspect or replace the encoded bytes. Return a Buffer/Uint8Array (or
+   * `{ data }`) to replace them; return nothing to keep them. Runs once on
+   * the final bytes, after any maxBytes search.
+   */
+  afterEncode?: ((encoded: EncodedImage, context: EncodeContext) => Buffer | Uint8Array | { data: Buffer | Uint8Array } | void | Promise<Buffer | Uint8Array | { data: Buffer | Uint8Array } | void>) | null;
+}
+
 export interface OptimizeOptions {
   /** Directory for encoded files. Default: pixelpress-out */
   outDir?: string;
@@ -116,6 +150,11 @@ export interface OptimizeOptions {
   density?: number;
   /** Add a tiny placeholder and dominant color. Default: false */
   lqip?: boolean;
+  /**
+   * API and JS-config only (functions cannot come from CLI flags or JSON).
+   * beforeEncode modifies the sharp pipeline; afterEncode can replace bytes.
+   */
+  hooks?: EncodeHooks;
   /** Reuse the output cache. API default: false; CLI default: true. */
   cache?: boolean;
   /** Cache directory. Default: node_modules/.cache/pixelpress */
@@ -257,6 +296,8 @@ export interface TranscodeOptions {
   extract?: string | ExtractOptions;
   extend?: number | string | number[] | ExtendOptions;
   density?: number;
+  /** Same hooks as optimize(); see EncodeHooks. */
+  hooks?: EncodeHooks;
 }
 
 export interface TranscodeResult {

@@ -50,6 +50,7 @@
       <a href="#result">Result shape</a>
       <a href="#transcode">transcode()</a>
       <a href="#options">Options</a>
+      <a href="#hooks">Hooks</a>
       <a href="#failures">Failures</a>
       <a href="#types">TypeScript</a>
       <a href="#recipes">Recipes</a>
@@ -195,10 +196,28 @@ await writeFile('upload.avif', data);
               <tr><td>Encode</td><td><code>quality, effort, lossless, progressive, chromaSubsampling, alphaQuality, palette, compressionLevel, maxBytes, background, keepMetadata</code></td></tr>
               <tr><td>Naming</td><td><code>prefix, suffix, hash</code></td></tr>
               <tr><td>Derived assets</td><td><code>lqip</code></td></tr>
+              <tr><td>Hooks</td><td><code>hooks.beforeEncode, hooks.afterEncode</code> (API and JS config only)</td></tr>
             </tbody>
           </table>
         </div>
         <p>Presets: <code>web</code>, <code>thumb</code>, <code>social</code>, <code>lossless</code>. Explicit options override them. Quality and effort objects merge with preset values.</p>
+      </section>
+
+      <section id="hooks">
+        <h2>Hooks</h2>
+        <p>API and JS-config only. <code>beforeEncode</code> receives the sharp pipeline before encoding — mutate it or return a replacement. <code>afterEncode</code> receives the final bytes and can return a <code>Buffer</code> to replace them. Hooks are part of the cache fingerprint.</p>
+        <div class="code">
+          <div class="code-bar"><span>watermark.js</span><button class="copy" type="button" data-copy="#hooks-code">Copy</button></div>
+          <pre id="hooks-code">const report = await optimize(['public/images'], {
+  outDir: 'dist/images',
+  formats: ['webp'],
+  hooks: {
+    beforeEncode: (pipeline) => pipeline.composite([
+      { input: 'assets/mark.png', gravity: 'southeast' },
+    ]),
+  },
+});</pre>
+        </div>
       </section>
 
       <section id="failures">
@@ -224,7 +243,7 @@ if (report.failed.length) {
 
       <section id="types">
         <h2>TypeScript</h2>
-        <p>Declarations are included. Main types: <code>OptimizeOptions</code>, <code>OptimizeResult</code>, <code>ProcessedFile</code>, <code>Variant</code>, <code>TranscodeOptions</code>, <code>TranscodeResult</code>, and <code>PresetName</code>.</p>
+        <p>Declarations are included. Main types: <code>OptimizeOptions</code>, <code>OptimizeResult</code>, <code>ProcessedFile</code>, <code>Variant</code>, <code>TranscodeOptions</code>, <code>TranscodeResult</code>, <code>EncodeHooks</code>, <code>EncodeContext</code>, and <code>PresetName</code>.</p>
         <div class="code">
           <div class="code-bar"><span>types.ts</span><button class="copy" type="button" data-copy="#types-code">Copy</button></div>
           <pre id="types-code">import type { OptimizeResult, Variant } from 'pixelpress';

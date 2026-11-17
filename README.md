@@ -547,6 +547,35 @@ await fs.writeFile('upload.avif', data);
 `transcode` accepts a filesystem path, `Buffer`, or `Uint8Array` and applies the
 same transforms, format tuning, and size budget as `optimize`.
 
+## Hooks
+
+API and JS-config only. `beforeEncode` receives the sharp pipeline before
+encoding — mutate it in place or return a replacement. `afterEncode` receives
+the final bytes and can return a `Buffer` to replace them. Both may be async.
+
+```js
+import { optimize } from 'pixelpress';
+
+const report = await optimize(['public/images'], {
+  outDir: 'dist/images',
+  formats: ['webp'],
+  hooks: {
+    // Watermark every variant before it is encoded.
+    beforeEncode: (pipeline) => pipeline.composite([
+      { input: 'assets/mark.png', gravity: 'southeast' },
+    ]),
+    // Inspect or rewrite the encoded bytes. Runs once per variant,
+    // after any maxBytes search.
+    afterEncode: async ({ data, info }, { format, width }) => {
+      console.log(format, width, data.length);
+    },
+  },
+});
+```
+
+Hooks are part of the cache fingerprint: changing a hook re-encodes, and
+`afterEncode` replacements are what gets written, cached, hashed, and pruned.
+
 ## Releasing
 
 CI runs on Node 22 and 24 for Linux and macOS. For a release with npm

@@ -372,6 +372,8 @@ function normalizeImageOptions(options) {
   if (options.palette === true) palette = true;
   if (options.palette === false) palette = false;
 
+  const hooks = normalizeHooks(options.hooks);
+
   return {
     quality,
     effort,
@@ -403,7 +405,23 @@ function normalizeImageOptions(options) {
     maxBytes,
     background,
     keepMetadata: Boolean(options.keepMetadata),
+    hooks,
   };
+}
+
+function normalizeHooks(input) {
+  if (input == null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new TypeError('hooks must be an object like { beforeEncode, afterEncode }');
+  }
+  const { beforeEncode = null, afterEncode = null } = input;
+  for (const [name, fn] of [['beforeEncode', beforeEncode], ['afterEncode', afterEncode]]) {
+    if (fn != null && typeof fn !== 'function') {
+      throw new TypeError(`hooks.${name} must be a function`);
+    }
+  }
+  if (beforeEncode == null && afterEncode == null) return null;
+  return { beforeEncode, afterEncode };
 }
 
 function normalizeFormats(input) {
@@ -615,8 +633,13 @@ function sanitizeOptions(cfg) {
 }
 
 function fingerprint(cfg) {
+  // Functions do not survive JSON.stringify, so hook sources are hashed
+  // explicitly. Otherwise changing a hook would silently reuse cached output.
+  const hooksSource = cfg.hooks
+    ? `|${cfg.hooks.beforeEncode?.toString() ?? ''}|${cfg.hooks.afterEncode?.toString() ?? ''}`
+    : '';
   return createHash('sha256')
-    .update(JSON.stringify(sanitizeOptions(cfg)))
+    .update(JSON.stringify(sanitizeOptions(cfg)) + hooksSource)
     .digest('hex')
     .slice(0, 16);
 }
@@ -909,7 +932,9 @@ async function processSource(spec, cfg, claimed, cache) {
     for (const variant of variants) {
       for (const format of cfg.formats) {
         const keepFrames = animatedInput && ANIMATED_OUTPUT_FORMATS.has(format);
-        const needsBuffer = cfg.hash || cfg.maxBytes != null;
+        // afterEncode replaces bytes, so it needs the encoded buffer even when
+        // neither hash nor maxBytes would otherwise require one.
+        const needsBuffer = cfg.hash || cfg.maxBytes != null || cfg.hooks?.afterEncode != null;
         let encoded = null;
 
         if (needsBuffer) {
@@ -932,12 +957,15 @@ async function processSource(spec, cfg, claimed, cache) {
           if (encoded) {
             await writeAtomic(outPath, (temporary) => fs.writeFile(temporary, encoded.data));
           } else {
-            info = await writeAtomic(outPath, (temporary) => buildPipeline(spec.file, cfg, format, {
-              width: variant.width,
-              height: variant.height,
-              quality,
-              animated: keepFrames,
-            }).toFile(temporary));
+            info = await writeAtomic(outPath, async (temporary) => {
+              const pipeline = await buildPipeline(spec.file, cfg, format, {
+                width: variant.width,
+                height: variant.height,
+                quality,
+                animated: keepFrames,
+              });
+              return pipeline.toFile(temporary);
+            });
           }
           if (cfg.preserveDates) {
             await fs.utimes(outPath, stat.atime, stat.mtime);
@@ -1080,9 +1108,10 @@ function sha256(data) {
 
 async function encodeToBuffer(input, cfg, format, width, height, animated = false) {
   const quality = cfg.quality[format];
+  const context = { input, format, width, height, quality, animated };
   if (cfg.maxBytes != null) {
     const attempt = (value) => buildPipeline(input, cfg, format, { width, height, quality: value, animated })
-      .toBuffer({ resolveWithObject: true })
+      .then((pipeline) => pipeline.toBuffer({ resolveWithObject: true }))
       .then(({ data, info }) => ({ data, info, quality: value }));
 
     let best = await attempt(quality);
@@ -1107,15 +1136,31 @@ async function encodeToBuffer(input, cfg, format, width, height, animated = fals
       }
       best = smallest;
     }
-    return best;
+    return applyAfterEncode(best, cfg, context);
   }
 
-  const { data, info } = await buildPipeline(input, cfg, format, { width, height, quality, animated })
+  const { data, info } = await (await buildPipeline(input, cfg, format, { width, height, quality, animated }))
     .toBuffer({ resolveWithObject: true });
-  return { data, info, quality };
+  return applyAfterEncode({ data, info, quality }, cfg, context);
 }
 
-function buildPipeline(input, cfg, format, { width, height, quality, animated = false }) {
+async function applyAfterEncode(result, cfg, context) {
+  // Runs once on the final bytes, after any maxBytes search, so a hook that
+  // replaces data cannot silently break the byte budget it searched for.
+  const hook = cfg.hooks?.afterEncode;
+  if (!hook) return result;
+  const replacement = await hook({ data: result.data, info: result.info }, context);
+  if (replacement == null) return result;
+  const data = Buffer.isBuffer(replacement) || replacement instanceof Uint8Array
+    ? Buffer.from(replacement)
+    : replacement.data != null
+      ? Buffer.from(replacement.data)
+      : null;
+  if (!data) return result;
+  return { ...result, data, info: { ...result.info, size: data.length } };
+}
+
+async function buildPipeline(input, cfg, format, { width, height, quality, animated = false }) {
   let pipeline = sharp(input, {
     ...(cfg.density ? { density: cfg.density } : {}),
     ...(animated ? { animated: true } : {}),
@@ -1147,6 +1192,13 @@ function buildPipeline(input, cfg, format, { width, height, quality, animated = 
   if (cfg.extend) pipeline = pipeline.extend({ ...cfg.extend, background: cfg.background });
   if (format === 'jpeg') pipeline = pipeline.flatten({ background: cfg.background });
   if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ orientation: 1 });
+
+  if (cfg.hooks?.beforeEncode) {
+    const replacement = await cfg.hooks.beforeEncode(pipeline, {
+      input, format, width, height, quality, animated,
+    });
+    if (replacement) pipeline = replacement;
+  }
 
   return pipeline[format](encoderOptions(format, cfg, quality));
 }
