@@ -1,5 +1,13 @@
 # pixelpress
 
+<p align="center">
+  <img src="assets/banner.png" alt="pixelpress – Images, pressed. Bulk image compression: AVIF, WebP, JPEG, PNG with globs, widths and cache." width="100%">
+</p>
+
+<p align="center">
+  <img src="assets/logo.svg" alt="pixelpress logo" width="64" height="64">
+</p>
+
 [![CI](https://github.com/aotr/pixelpress/actions/workflows/ci.yml/badge.svg)](https://github.com/aotr/pixelpress/actions/workflows/ci.yml)
 [![website](https://img.shields.io/badge/website-live-c9ff3d?labelColor=141310)](https://aotr.github.io/pixelpress/)
 [![npm](https://img.shields.io/npm/v/pixelpress.svg)](https://www.npmjs.com/package/pixelpress)
